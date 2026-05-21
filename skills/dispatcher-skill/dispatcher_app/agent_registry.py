@@ -78,6 +78,60 @@ def write_agent_registry(path: Path, payload: dict[str, Any]) -> None:
     temp_path.replace(path)
 
 
+def update_agent_registry_agent(
+    path: Path,
+    role_key: str,
+    *,
+    key: str | None = None,
+    key_status: str | None = None,
+    name: str | None = None,
+) -> None:
+    raw = read_agent_registry(path)
+    changed = False
+    for item in raw.get("agents", []):
+        if item.get("role_key") == role_key:
+            if key is not None:
+                item["key"] = key
+            if key_status is not None:
+                item["key_status"] = key_status
+            if name is not None:
+                item["name"] = name
+            changed = True
+            break
+    if not changed:
+        raise RuntimeError(f"Agent role_key not found: {role_key}")
+    write_agent_registry(path, raw)
+
+
+def upsert_agent_registry_agent(
+    path: Path,
+    role_key: str,
+    name: str,
+    *,
+    key: str | None = None,
+    key_status: str | None = None,
+) -> None:
+    raw = read_agent_registry(path)
+    for item in raw.get("agents", []):
+        if item.get("role_key") == role_key:
+            if key is not None:
+                item["key"] = key
+            if key_status is not None:
+                item["key_status"] = key_status
+            item.setdefault("name", name)
+            write_agent_registry(path, raw)
+            return
+    raw.setdefault("agents", []).append(
+        {
+            "role_key": role_key,
+            "name": name,
+            "key": key,
+            "key_status": key_status or "missing",
+        }
+    )
+    write_agent_registry(path, raw)
+
+
 def ensure_agents_file(path: Path) -> bool:
     if path.is_file():
         read_agent_registry(path)

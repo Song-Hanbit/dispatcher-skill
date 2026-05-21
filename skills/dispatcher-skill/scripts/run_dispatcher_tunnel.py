@@ -28,6 +28,7 @@ REQUIREMENTS_FILE_NAME = "requirements.md"
 CLOUDFLARED_ENV = "DISPATCHER_CLOUDFLARED"
 CLOUDFLARED_INSTALL_DIR_ENV = "DISPATCHER_CLOUDFLARED_INSTALL_DIR"
 WORKSPACE_ROOT_ENV = "DISPATCHER_WORKSPACE_ROOT"
+CANDIDATE_OPERATOR_KEY_ENV = ("DISPATCHER_OPERATOR_KEY", "CODEX_THREAD_ID")
 RECOMMENDED_CLOUDFLARED_INSTALL_DIR = "~/.local/bin"
 RECOMMENDED_CLOUDFLARED_PATH = "~/.local/bin/cloudflared"
 RESET_CACHE_DIR_NAMES = ("__pycache__", ".pytest_cache")
@@ -83,6 +84,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--password", default=None, help="Dispatcher login password for init. Prefer --password-file or prompt.")
     parser.add_argument("--password-file", default=None, help="File containing the dispatcher login password for init.")
+    parser.add_argument(
+        "--operator-key",
+        default=None,
+        help="Codex operator session handle to store in agents.json during init. Defaults to DISPATCHER_OPERATOR_KEY or CODEX_THREAD_ID when present.",
+    )
     parser.add_argument("--no-start", action="store_true", help="For init, write config but do not start tmux/tunnel.")
     parser.add_argument(
         "--install-cloudflared",
@@ -144,13 +150,17 @@ def import_agent_registry(repo: Path):
     repo_entry = str(repo)
     if repo_entry not in sys.path:
         sys.path.insert(0, repo_entry)
-    from dispatcher_app.agent_registry import ensure_agents_file, read_agent_registry
+    from dispatcher_app.agent_registry import (
+        ensure_agents_file,
+        read_agent_registry,
+        upsert_agent_registry_agent,
+    )
 
-    return ensure_agents_file, read_agent_registry
+    return ensure_agents_file, read_agent_registry, upsert_agent_registry_agent
 
 
 def ensure_agent_registry(repo: Path) -> bool:
-    ensure_agents_file, _ = import_agent_registry(repo)
+    ensure_agents_file, _, _ = import_agent_registry(repo)
     return bool(ensure_agents_file(agents_path(repo)))
 
 
@@ -161,7 +171,7 @@ def agent_registry_status(repo: Path) -> dict[str, object]:
     error = ""
     if exists:
         try:
-            _, read_agent_registry = import_agent_registry(repo)
+            _, read_agent_registry, _ = import_agent_registry(repo)
             read_agent_registry(path)
             valid = True
         except Exception as exc:
@@ -172,6 +182,35 @@ def agent_registry_status(repo: Path) -> dict[str, object]:
         "agents_file_valid": valid,
         "agents_error": error,
     }
+
+
+def operator_key_from_sources(
+    explicit_key: str | None,
+    environ: dict[str, str] | None = None,
+) -> str:
+    if explicit_key is not None:
+        return explicit_key.strip()
+    values = environ if environ is not None else os.environ
+    for name in CANDIDATE_OPERATOR_KEY_ENV:
+        value = values.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def record_operator_key(repo: Path, operator_key: str) -> bool:
+    operator_key = operator_key.strip()
+    if not operator_key:
+        return False
+    _, _, upsert_agent_registry_agent = import_agent_registry(repo)
+    upsert_agent_registry_agent(
+        agents_path(repo),
+        "operator",
+        "Operator",
+        key=operator_key,
+        key_status="ready",
+    )
+    return True
 
 
 def repo_relative_path(repo: Path, raw_path: str | Path) -> Path:
@@ -1131,6 +1170,7 @@ def run_foreground(args: argparse.Namespace, repo: Path, cloudflared: str) -> in
 def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
     validate_repo_requirements(repo)
     agents_created = ensure_agent_registry(repo)
+    operator_key = operator_key_from_sources(args.operator_key)
     existing = read_shell_env(local_env_path(repo))
     if not option_was_supplied("--session") and not existing.get("DISPATCHER_SESSION"):
         args.session = default_init_session(repo)
@@ -1159,10 +1199,13 @@ def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
         require_tmux()
 
     write_local_state_files(repo, args, password=password, port=port)
+    operator_key_recorded = record_operator_key(repo, operator_key)
     if agents_created:
         print(f"Created local agent registry at {agents_path(repo)}", flush=True)
     else:
         print(f"Verified local agent registry at {agents_path(repo)}", flush=True)
+    if operator_key_recorded:
+        print("Recorded operator Codex handle in local agent registry.", flush=True)
     print(f"Initialized dispatcher skill runtime state in {local_state_dir(repo)}", flush=True)
     print(f"Repository: {repo}", flush=True)
     print(f"Configured local URL: http://{args.host}:{port}", flush=True)

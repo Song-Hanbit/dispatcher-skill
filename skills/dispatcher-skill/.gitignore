@@ -1,8 +1,0 @@
-# Local dispatcher/runtime state
-data/
-dispatcher_app/agents.json
-
-# Python and generated caches
-__pycache__/
-*.py[cod]
-.pytest_cache/

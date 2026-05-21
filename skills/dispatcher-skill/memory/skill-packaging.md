@@ -87,7 +87,7 @@ Without `--confirm-reset`, this is a dry run that lists ignored local state and 
 Do not package local runtime or machine-specific state:
 
 - `data/`, including runtime logs, SQLite DBs, reboot state, request logs, local lock/token state, and agent conversation records.
-- Per-install `dispatcher_app/agents.json` registry state; `dispatcher_app/agent_registry.py` recreates a default registry with empty handles during init or first direct runtime use.
+- Per-install `dispatcher_app/agents.json` registry state; `dispatcher_app/agent_registry.py` recreates a default registry during init or first direct runtime use, and init fills the operator handle when an operator key source is available.
 - Generated caches such as `__pycache__/`, `.pytest_cache/`, bytecode, temporary outputs, and downloaded build artifacts.
 - Secrets, passwords, Cloudflare tokens, local tunnel URLs, shell history, raw logs, full transcripts, prompts, stdout/stderr dumps, and full JSONL records.
 - Host-specific process state such as tmux session state, PID files, sockets, and lock tokens.

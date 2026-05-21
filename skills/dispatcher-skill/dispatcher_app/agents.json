@@ -5,20 +5,20 @@
     {
       "role_key": "operator",
       "name": "Operator",
-      "key": null,
-      "key_status": "missing"
+      "key": "019e4992-b2b9-71e0-af74-ce2b555dddaf",
+      "key_status": "ready"
     },
     {
       "role_key": "manager.default",
       "name": "Manager",
-      "key": "019e497b-04df-7433-aca5-6eb768860c21",
+      "key": "019e4992-b2b9-71e0-af74-ce2b555dddaf",
       "key_status": "ready"
     },
     {
       "role_key": "worker.default",
-      "name": "Worker",
-      "key": null,
-      "key_status": "missing"
+      "name": "Verifier",
+      "key": "019e49a0-1a07-7c53-97c6-bb0478c8cb47",
+      "key_status": "dispatcher_ready"
     }
   ]
 }

@@ -31,6 +31,7 @@ CODEX_SANDBOX_MODE = "workspace-write"
 EventCallback = Callable[[str, str], None]
 TranscriptCallback = Callable[[dict[str, Any]], None]
 CancelCheck = Callable[[], bool]
+ThreadStartedCallback = Callable[[str], None]
 
 
 class CodexRunCancelled(RuntimeError):
@@ -352,6 +353,7 @@ def run_codex_streaming(
     worker_catalog: list[dict[str, str | None]] | None = None,
     event_callback: EventCallback | None = None,
     transcript_callback: TranscriptCallback | None = None,
+    thread_started_callback: ThreadStartedCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> tuple[int, str, str]:
     process = subprocess.Popen(
@@ -383,6 +385,8 @@ def run_codex_streaming(
                     "payload": event,
                 },
             )
+            if event.get("type") == "thread.started":
+                emit_thread_started(thread_started_callback, event.get("thread_id"))
             for activity_event in codex_activity_events(event, worker_catalog or []):
                 emit_runner_event(event_callback, activity_event[0], activity_event[1])
 
@@ -444,15 +448,28 @@ def run_codex_streaming(
     except subprocess.TimeoutExpired:
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
+        close_process_pipes(process)
         raise
     except CodexRunCancelled:
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
+        close_process_pipes(process)
         raise
 
     stdout_thread.join(timeout=1)
     stderr_thread.join(timeout=1)
+    close_process_pipes(process)
     return returncode, "".join(stdout_lines), "".join(stderr_lines)
+
+
+def close_process_pipes(process: subprocess.Popen[str]) -> None:
+    for pipe in (process.stdin, process.stdout, process.stderr):
+        if pipe is None or pipe.closed:
+            continue
+        try:
+            pipe.close()
+        except OSError:
+            pass
 
 
 def codex_failure_error(
@@ -598,6 +615,21 @@ def emit_transcript(
         return
     try:
         transcript_callback(record)
+    except Exception:
+        pass
+
+
+def emit_thread_started(
+    thread_started_callback: ThreadStartedCallback | None,
+    raw_thread_id: object,
+) -> None:
+    if thread_started_callback is None:
+        return
+    thread_id = str(raw_thread_id or "").strip()
+    if not thread_id:
+        return
+    try:
+        thread_started_callback(thread_id)
     except Exception:
         pass
 

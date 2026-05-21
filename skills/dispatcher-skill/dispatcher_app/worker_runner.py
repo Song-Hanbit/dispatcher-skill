@@ -18,6 +18,7 @@ from .codex_runner import (
     codex_failure_error,
     parse_codex_events,
     run_codex_streaming,
+    ThreadStartedCallback,
     utc_now,
 )
 
@@ -54,6 +55,7 @@ class CodexWorkerRunner:
         request: dict[str, Any],
         worker: Any,
         event_callback: EventCallback | None = None,
+        thread_started_callback: ThreadStartedCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> WorkerRunResult:
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +123,7 @@ class CodexWorkerRunner:
                 worker_catalog=[],
                 event_callback=emit_worker_event,
                 transcript_callback=append_transcript,
+                thread_started_callback=thread_started_callback,
                 cancel_check=cancel_check,
             )
         except CodexRunCancelled:

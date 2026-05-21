@@ -36,7 +36,7 @@ python3 scripts/smoke_skill_package.py --repo <candidate>
 ## Migration Init
 
 - [ ] In the copied/installed candidate, run `init-status --repo <candidate>` before runtime work to detect whether ignored local state exists.
-- [ ] Confirm `dispatcher_app/agents.json` is absent from package payload before init, then generated locally with empty handles by init or first direct runtime use.
+- [ ] Confirm `dispatcher_app/agents.json` is absent from package payload before init, then generated locally by init or first direct runtime use; init should record the operator handle when an operator key source is available.
 - [ ] Confirm `init-status --repo <candidate>` presents copy-ready `~/.local/bin` install/init commands when `cloudflared` is missing or unconfigured.
 - [ ] For operator-approved setup, run `init --repo <candidate> --cloudflared ~/.local/bin/cloudflared --port <port>` after the suggested install, or use another host-approved binary path.
 - [ ] Confirm `init` persists the chosen binary path in `data/dispatcher.env` as `DISPATCHER_CLOUDFLARED`.

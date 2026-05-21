@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import inspect
-import json
 import signal
 import threading
 import time
@@ -10,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agent_registry import ensure_agents_file, read_agent_registry
+from .agent_registry import ensure_agents_file, read_agent_registry, update_agent_registry_agent
 from .codex_runner import CodexManagerRunner, CodexRunCancelled
 from .reboot import append_reboot_request, normalize_command, unprocessed_request_count
 from .server import GLOBAL_RUNTIME_LOCK, Store
@@ -107,24 +106,13 @@ class AgentRegistry:
         key_status: str | None = None,
         name: str | None = None,
     ) -> None:
-        raw = read_agent_registry(self.path)
-        changed = False
-        for item in raw.get("agents", []):
-            if item.get("role_key") == role_key:
-                if key is not None:
-                    item["key"] = key
-                if key_status is not None:
-                    item["key_status"] = key_status
-                if name is not None:
-                    item["name"] = name
-                changed = True
-                break
-        if not changed:
-            raise RuntimeError(f"Agent role_key not found: {role_key}")
-
-        temp_path = self.path.with_name(f"{self.path.name}.tmp")
-        temp_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temp_path.replace(self.path)
+        update_agent_registry_agent(
+            self.path,
+            role_key,
+            key=key,
+            key_status=key_status,
+            name=name,
+        )
 
 
 class DispatcherLoop:
@@ -527,6 +515,34 @@ class DispatcherLoop:
             return
         heartbeat_stop: threading.Event | None = None
         heartbeat_thread: threading.Thread | None = None
+        worker_keys_recorded_during_run: set[str] = set()
+
+        def record_worker_session_key(worker_key: str) -> None:
+            nonlocal worker
+            worker_key = worker_key.strip()
+            if not worker_key:
+                return
+            if worker_key == worker.key and worker.key_status == DISPATCHER_WORKER_KEY_STATUS:
+                return
+            if worker_key in worker_keys_recorded_during_run:
+                return
+            self.registry.update_agent_key(
+                worker.role_key,
+                worker_key,
+                key_status=DISPATCHER_WORKER_KEY_STATUS,
+            )
+            worker_keys_recorded_during_run.add(worker_key)
+            worker = AgentRecord(
+                role_key=worker.role_key,
+                name=worker.name,
+                key=worker_key,
+                key_status=DISPATCHER_WORKER_KEY_STATUS,
+            )
+            self.store.add_event_if_task_active(
+                task_id,
+                "worker_key_recorded",
+                f"Recorded dispatcher-owned Codex session key for {worker.role_key} when the worker session started.",
+            )
 
         def record_worker_event(event_type: str, message: str) -> None:
             if self.task_canceled_or_missing(task_id):
@@ -549,6 +565,8 @@ class DispatcherLoop:
                 task_id,
             )
             run_kwargs: dict[str, Any] = {"event_callback": record_worker_event}
+            if supports_parameter(self.worker_runner.run, "thread_started_callback"):
+                run_kwargs["thread_started_callback"] = record_worker_session_key
             if supports_parameter(self.worker_runner.run, "cancel_check"):
                 run_kwargs["cancel_check"] = task_should_stop
             result = self.worker_runner.run(request, worker, **run_kwargs)
@@ -580,8 +598,11 @@ class DispatcherLoop:
             )
             return
         if result.worker_key and (
-            result.worker_key != worker.key
-            or worker.key_status != DISPATCHER_WORKER_KEY_STATUS
+            result.worker_key not in worker_keys_recorded_during_run
+            and (
+                result.worker_key != worker.key
+                or worker.key_status != DISPATCHER_WORKER_KEY_STATUS
+            )
         ):
             self.registry.update_agent_key(
                 worker.role_key,
