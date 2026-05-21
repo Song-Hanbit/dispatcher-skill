@@ -51,6 +51,10 @@ The same helper has guarded purge commands for approved cleanup: `purge-tasks` s
 - `dispatcher_app/agents.json` is the worker catalog given to managers when they need to select or reuse workers.
 - Managers choose dispatcher-owned worker display names when initializing or renaming a worker request by passing `--worker-name` to `dispatcher_app.worker_client`; the dispatcher persists that display name in `agents.json`.
 - Worker reuse must avoid conflicting active tasks.
+- Manager tasks should treat worker use as expected for substantial or cross-cutting work, especially when a task touches two or more subsystems, combines UI/backend/runtime/docs changes, requires broad repo search or cleanup, or carries meaningful regression risk.
+- Managers should use workers for independent verification when implementation can continue locally while the worker checks behavior, tests, docs, or missed references.
+- Managers should avoid worker requests for simple Q&A, trivial single-file edits, urgent blocking work where the next local step depends on the answer, or when worker use is unavailable, failing, or would block progress.
+- If a manager completes substantial cross-cutting work without a worker, the final result should briefly state why.
 
 ## Current Agents
 
@@ -64,7 +68,7 @@ The same helper has guarded purge commands for approved cleanup: `purge-tasks` s
 
 The dispatcher should record manager `role_key` in task events, leases, and logs. It may pass a filtered worker catalog to the manager, but pending task dispatch remains manager-only. Worker execution happens only after the active manager queues a worker request for the active task. Human-facing UI can display `name`.
 
-Manager calls use `codex --ask-for-approval never --disable plugins exec --sandbox workspace-write --cd <workspace-root>` when no manager key exists and the same `exec` options before `resume <SESSION_ID>` after a key is recorded. The task-plane approval policy is non-interactive, but the sandbox must be `workspace-write` so managers can edit anywhere in the active repository working tree and queue dispatcher-owned worker requests through SQLite. When this skill is nested at `skills/dispatcher-skill/`, the Codex workspace root is the surrounding repository root; helper commands still run from the dispatcher skill root, so manager prompts include `cd skills/dispatcher-skill && python3 -m dispatcher_app...` command forms. The manager task path disables Codex plugins because dispatcher task handling does not need ChatGPT plugin discovery; operator remains responsible for skill/plugin/tool updates. The first `thread.started.thread_id` observed from Codex JSONL output becomes the manager `key`.
+Manager calls use `codex --ask-for-approval never --disable plugins exec --sandbox workspace-write --cd <workspace-root>` when no manager key exists and the same `exec` options before `resume <SESSION_ID>` after a key is recorded. The task-plane approval policy is non-interactive, but the sandbox must be `workspace-write` so managers can edit anywhere in the active repository working tree and queue dispatcher-owned worker requests through SQLite. When this skill is nested at `.agents/skills/dispatcher-skill` or `skills/dispatcher-skill`, the Codex workspace root is the surrounding repository root; helper commands still run from the dispatcher skill root, so manager prompts include a relative `cd <skill-root> && python3 -m dispatcher_app...` command form. The manager task path disables Codex plugins because dispatcher task handling does not need ChatGPT plugin discovery; operator remains responsible for skill/plugin/tool updates. The first `thread.started.thread_id` observed from Codex JSONL output becomes the manager `key`.
 
 Each dispatcher task thread should keep one fixed manager for that task. With only `manager.default` active, keep dispatcher concurrency at 1 so simultaneous tasks do not share and scramble one manager session context.
 

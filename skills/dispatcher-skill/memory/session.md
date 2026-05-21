@@ -12,7 +12,7 @@ This file keeps compact, portable working context for installed dispatcher skill
 ## Recent Portable Changes
 
 - Root `SKILL.md` describes this repository as one dispatcher app skill with integrated runtime and context helpers.
-- Dispatcher-managed manager and worker Codex runs use the surrounding repository root as their workspace when the skill is nested at `skills/dispatcher-skill/`, while helper commands remain anchored in the dispatcher skill root.
+- Dispatcher-managed manager and worker Codex runs use the surrounding repository root as their workspace when the skill is nested at `.agents/skills/dispatcher-skill/` or `skills/dispatcher-skill/`, while helper commands remain anchored in the dispatcher skill root.
 - Dispatcher-owned worker display names are no longer hardcoded to a personal name; managers can provide a name with `worker_client --worker-name`, and the dispatcher persists it in `agents.json`.
 - `memory/skill-packaging.md` defines the package boundary, runtime-state exclusion policy, helper script treatment, cloudflared packaging profiles, and deferred packaging follow-ups.
 - `requirements.md` is the operator-facing pre-init checklist for Python, Codex, tmux, network, and cloudflared binary choices.
@@ -23,8 +23,9 @@ This file keeps compact, portable working context for installed dispatcher skill
 - `scripts/run_dispatcher_tunnel.py reset --repo <candidate>` provides a deployment-prep dry run by default; with `--confirm-reset` it deletes only ignored skill-local runtime state and generated caches, not source docs or `bin/cloudflared`.
 - Cloudflared should normally be outside exported packages: use `--cloudflared ~/.local/bin/cloudflared`, persisted `DISPATCHER_CLOUDFLARED`, PATH, or ignored `data/bin/cloudflared`; `init-status` prints copy-ready `~/.local/bin` install/init commands; `bin/cloudflared` is only for repo-local or intentionally vetted binary profiles.
 - `memory/release-checklist.md` tracks package include/exclude, secret/runtime cleanup, smoke checks, cloudflared profile, migration/init, reject/pause, and rollback criteria.
-- The web UI Directory section can report the surrounding repository container root when the dispatcher skill is installed under `skills/dispatcher-skill/`, while runtime state remains under the skill's ignored `data/`.
-- Tmux session defaults use `<repo>-tunnel`, where `<repo>` is found by searching the directory hierarchy. For nested installs at `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`, not the `dispatcher-skill` directory name; this development repository's default is `dispatcher-skill-tunnel`.
+- The web UI Directory section reports the operator workspace root, including project-local npx installs under `.agents/skills/dispatcher-skill/`, while runtime state remains under the skill's ignored `data/`.
+- UI panel defaults are viewport-aware: compact viewports start with every panel collapsed, while larger viewports open Activity, Agent status, New task, and Queue by default and keep Directory plus task cards collapsed.
+- Tmux session defaults use `<repo>-tunnel`, where `<repo>` is found by searching the directory hierarchy. For nested installs at `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/`; for `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`, not the `dispatcher-skill` directory name. This development repository's default is `dispatcher-skill-tunnel`.
 - Init/start summaries end with a command for checking the current Quick Tunnel URL; memory and durable docs still omit the generated URL itself.
 - Manager and dispatcher-owned worker calls explicitly set non-interactive approval policy plus `--sandbox workspace-write --cd <repo>` so task-plane agents can edit the skill repo and use SQLite-backed worker requests instead of inheriting a read-only Codex CLI default.
 

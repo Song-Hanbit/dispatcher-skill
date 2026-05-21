@@ -22,14 +22,15 @@ Notes:
 
 - `-a codex` targets Codex.
 - Project-local installation is the default here so each repository can carry its own dispatcher skill configuration.
+- The installed skill copy is expected under `.agents/skills/dispatcher-skill/` in that repository.
 - `-y` skips interactive confirmation. Omit it if you want to review prompts.
 - After installing, restart Codex so the new skill is discovered.
 
 ## User Flow
 
 1. Install this repository's skill payload with `npx skills add` or your Codex CLI skill installation flow.
-   - The shippable skill is in `skills/dispatcher-skill/`.
-   - If your installer asks for a directory, use that directory.
+   - The source payload in this repository is `skills/dispatcher-skill/`.
+   - A project-local npx install normally copies it to `.agents/skills/dispatcher-skill/` inside the target repository.
    - If your installer accepts a Git repository and skill path, point it at this repository and `skills/dispatcher-skill/`.
 2. Open Codex in the environment where the skill is installed.
 3. Ask the operator to initialize it, for example:
@@ -43,11 +44,13 @@ Initialize the dispatcher skill and start the local dispatcher runtime.
 
 ## What The Operator Handles
 
-The operator should work from the installed skill root:
+For a project-local npx install, the operator should stay in the repository root and pass the installed skill root explicitly:
 
 ```bash
-cd skills/dispatcher-skill
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
 ```
+
+This keeps the dispatcher UI's Directory panel and header title pointed at the repository, while runtime state stays under `.agents/skills/dispatcher-skill/data/`. When maintaining this source repository directly, use `cd skills/dispatcher-skill` instead.
 
 Before starting runtime services, the operator reviews:
 
@@ -58,8 +61,8 @@ Before starting runtime services, the operator reviews:
 The operator chooses how `cloudflared` is provided. The recommended server-local path is outside the skill checkout:
 
 ```bash
-python3 scripts/run_dispatcher_tunnel.py install-cloudflared --repo . --cloudflared-install-dir ~/.local/bin
-python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bin/cloudflared --port 8000
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init --repo .agents/skills/dispatcher-skill --cloudflared ~/.local/bin/cloudflared --port 8000
 ```
 
 `init-status` prints copy-ready commands for this setup. The operator may also use a host-managed `cloudflared` on `PATH`, an explicit binary path, or the ignored `data/bin/cloudflared` fallback for local throwaway installs.
@@ -74,6 +77,8 @@ python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bi
 - `skills/dispatcher-skill/memory/`: portable skill operating memory.
 - `skill-migration-memory/`: ignored development-container notes, not package payload.
 
+After project-local npx installation, the same skill files live under `.agents/skills/dispatcher-skill/` in the target repository.
+
 ## Package And State Boundary
 
 Package source and portable docs, not local runtime state.
@@ -84,15 +89,16 @@ Include the skill payload source, scripts, memory docs, and selected non-secret 
 
 ## Maintainer Checks
 
-From the skill root:
+From the repository root after a project-local npx install:
 
 ```bash
-cd skills/dispatcher-skill
-python3 scripts/smoke_skill_package.py --repo .
-python3 -m py_compile dispatcher_app/*.py
-python3 scripts/run_dispatcher_tunnel.py init-status --repo .
-python3 scripts/run_dispatcher_tunnel.py reset --repo .
+python3 .agents/skills/dispatcher-skill/scripts/smoke_skill_package.py --repo .agents/skills/dispatcher-skill
+python3 -m py_compile .agents/skills/dispatcher-skill/dispatcher_app/*.py
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py reset --repo .agents/skills/dispatcher-skill
 ```
+
+For this source repository, run the same checks from `skills/dispatcher-skill/`.
 
 These checks do not start tmux, Cloudflare, the server, the dispatcher loop, or the reboot watcher. `reset` is a dry run unless `--confirm-reset` is supplied.
 
@@ -129,14 +135,15 @@ npx skills add ./skills/dispatcher-skill -a codex -y
 
 - `-a codex`는 Codex를 대상으로 설치한다는 뜻입니다.
 - 여기서는 repository-local 설치를 기본으로 하므로 각 repository가 자신의 dispatcher skill 설정을 가질 수 있습니다.
+- 설치된 skill copy는 보통 해당 repository의 `.agents/skills/dispatcher-skill/` 아래에 생깁니다.
 - `-y`는 확인 prompt를 건너뜁니다. 직접 확인하고 싶다면 빼면 됩니다.
 - 설치 후에는 Codex를 다시 시작해야 새 skill이 발견됩니다.
 
 ## 사용자 흐름
 
 1. `npx skills add` 또는 Codex CLI의 skill 설치 흐름으로 이 repository의 skill payload를 설치합니다.
-   - 배포되는 skill은 `skills/dispatcher-skill/` 안에 있습니다.
-   - 설치 도구가 디렉토리를 묻는다면 이 디렉토리를 사용합니다.
+   - 이 source repository 안의 payload는 `skills/dispatcher-skill/`입니다.
+   - Project-local npx 설치 후에는 target repository 안의 `.agents/skills/dispatcher-skill/`에 복사됩니다.
    - 설치 도구가 Git repository와 skill path를 받는다면 이 repository와 `skills/dispatcher-skill/`을 지정합니다.
 2. Skill이 설치된 환경에서 Codex를 엽니다.
 3. Operator에게 초기화를 요청합니다. 예:
@@ -150,11 +157,13 @@ dispatcher skill을 초기화하고 로컬 dispatcher runtime을 시작해줘.
 
 ## Operator가 처리하는 일
 
-Operator는 설치된 skill root에서 작업해야 합니다.
+Project-local npx 설치에서는 operator가 repository root에 머무르고, 설치된 skill root를 명시적으로 넘기는 것이 기본입니다.
 
 ```bash
-cd skills/dispatcher-skill
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
 ```
+
+이렇게 해야 dispatcher UI의 Directory panel과 header title이 repository를 가리키고, runtime state는 `.agents/skills/dispatcher-skill/data/` 아래에 남습니다. 이 source repository 자체를 유지보수할 때는 대신 `cd skills/dispatcher-skill`을 사용합니다.
 
 Runtime service를 시작하기 전에 operator는 다음 문서를 확인합니다.
 
@@ -165,8 +174,8 @@ Runtime service를 시작하기 전에 operator는 다음 문서를 확인합니
 Operator는 `cloudflared`를 어디에서 제공할지 선택합니다. 서버 로컬 설치에는 skill checkout 밖의 `~/.local/bin` 경로를 권장합니다.
 
 ```bash
-python3 scripts/run_dispatcher_tunnel.py install-cloudflared --repo . --cloudflared-install-dir ~/.local/bin
-python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bin/cloudflared --port 8000
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init --repo .agents/skills/dispatcher-skill --cloudflared ~/.local/bin/cloudflared --port 8000
 ```
 
 `init-status`는 이 설정에 맞는 복사 가능한 명령을 출력합니다. Host가 관리하는 `PATH` 상의 `cloudflared`, 명시적인 binary path, 또는 임시 로컬 설치용으로 무시되는 `data/bin/cloudflared`도 사용할 수 있습니다.
@@ -181,6 +190,8 @@ python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bi
 - `skills/dispatcher-skill/memory/`: 설치된 skill에도 유효해야 하는 portable 운영 memory.
 - `skill-migration-memory/`: package payload가 아닌, 무시되는 개발 컨테이너 노트.
 
+Project-local npx 설치 후에는 같은 skill 파일들이 target repository의 `.agents/skills/dispatcher-skill/` 아래에 있습니다.
+
 ## Package와 State 경계
 
 Package에는 source와 portable docs만 넣고, local runtime state는 넣지 않습니다.
@@ -191,15 +202,16 @@ Skill payload source, scripts, memory docs, secret이 아닌 선택된 metadata�
 
 ## Maintainer 확인
 
-Skill root에서 실행합니다.
+Project-local npx 설치 후에는 repository root에서 실행합니다.
 
 ```bash
-cd skills/dispatcher-skill
-python3 scripts/smoke_skill_package.py --repo .
-python3 -m py_compile dispatcher_app/*.py
-python3 scripts/run_dispatcher_tunnel.py init-status --repo .
-python3 scripts/run_dispatcher_tunnel.py reset --repo .
+python3 .agents/skills/dispatcher-skill/scripts/smoke_skill_package.py --repo .agents/skills/dispatcher-skill
+python3 -m py_compile .agents/skills/dispatcher-skill/dispatcher_app/*.py
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py reset --repo .agents/skills/dispatcher-skill
 ```
+
+이 source repository에서는 같은 확인을 `skills/dispatcher-skill/`에서 실행합니다.
 
 이 확인 작업은 tmux, Cloudflare, server, dispatcher loop, reboot watcher를 시작하지 않습니다. `reset`은 `--confirm-reset`을 붙이지 않으면 dry run입니다.
 

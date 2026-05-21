@@ -31,16 +31,45 @@ AUTH_PASSWORD = os.environ.get("DISPATCHER_PASSWORD", "")
 COOKIE_NAME = "dispatcher_session"
 SESSION_TOKEN = secrets.token_urlsafe(32)
 BASE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = BASE_DIR.parent
+
+
+def operator_cwd() -> Path:
+    raw = os.environ.get("DISPATCHER_WORKSPACE_ROOT") or os.environ.get("DISPATCHER_OPERATOR_CWD")
+    if raw:
+        try:
+            return workspace_root_for_path(Path(raw).expanduser().resolve())
+        except OSError:
+            pass
+    repo_raw = os.environ.get("DISPATCHER_REPO")
+    if repo_raw:
+        try:
+            return workspace_root_for_path(Path(repo_raw).expanduser().resolve())
+        except OSError:
+            pass
+    return workspace_root_for_path(Path.cwd().resolve())
+
+
+def workspace_root_for_path(path: Path) -> Path:
+    if path.name == "dispatcher-skill" and path.parent.name == "skills":
+        skills_container = path.parent.parent
+        if skills_container.name == ".agents":
+            return skills_container.parent.resolve()
+        return skills_container.resolve()
+    return path
+
+
+REPO_ROOT = operator_cwd()
 DIRECTORY_ROOT = REPO_ROOT
-if REPO_ROOT.name == "dispatcher-skill" and REPO_ROOT.parent.name == "skills":
-    DIRECTORY_ROOT = REPO_ROOT.parent.parent
 PROJECT_NAME = REPO_ROOT.name or "Dispatcher"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 AGENTS_PATH = BASE_DIR / "agents.json"
 GLOBAL_RUNTIME_LOCK = "global_execution"
 TREE_EXCLUDED_NAMES = {
+    ".agents",
+    ".codex",
+    ".git",
+    ".pytest_cache",
     "__pycache__",
 }
 STATIC_TYPES = {
@@ -358,17 +387,12 @@ def worker_request_delegation_message(
 def list_directory_tree(
     root: Path = DIRECTORY_ROOT,
     *,
-    max_depth: int = 3,
-    max_entries: int = 160,
+    max_depth: int | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     items: list[dict[str, Any]] = []
-    truncated = False
 
     def walk(directory: Path, depth: int) -> None:
-        nonlocal truncated
-        if truncated:
-            return
         try:
             children = sorted(
                 directory.iterdir(),
@@ -382,24 +406,20 @@ def list_directory_tree(
                 continue
             if child.name.startswith(".") and not child.is_dir() and child.name != ".gitignore":
                 continue
-            if len(items) >= max_entries:
-                truncated = True
-                return
+            is_dir = child.is_dir() and not child.is_symlink()
             items.append(
                 {
                     "name": child.name,
                     "path": child.relative_to(root).as_posix(),
                     "depth": depth,
-                    "type": "dir" if child.is_dir() else "file",
+                    "type": "dir" if is_dir else "file",
                 }
             )
-            if child.is_dir() and depth < max_depth:
+            if is_dir and (max_depth is None or depth < max_depth):
                 walk(child, depth + 1)
-                if truncated:
-                    return
 
     walk(root, 0)
-    return {"root": root.as_posix(), "items": items, "truncated": truncated}
+    return {"root": root.as_posix(), "items": items}
 
 
 def rows_digest(rows: list[sqlite3.Row]) -> str:

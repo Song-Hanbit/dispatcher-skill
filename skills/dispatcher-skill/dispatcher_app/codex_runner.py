@@ -316,9 +316,15 @@ def codex_exec_prefix(codex_bin: str, repo: Path) -> list[str]:
 def codex_workspace_root(repo: Path) -> Path:
     repo = repo.resolve()
     if repo.name == "dispatcher-skill" and repo.parent.name == "skills":
-        outer = repo.parent.parent
+        skills_container = repo.parent.parent
+        if skills_container.name == ".agents":
+            outer = skills_container.parent
+            expected = outer / ".agents" / "skills" / "dispatcher-skill"
+        else:
+            outer = skills_container
+            expected = outer / "skills" / "dispatcher-skill"
         try:
-            if (outer / "skills" / "dispatcher-skill").resolve() == repo:
+            if expected.resolve() == repo:
                 return outer
         except OSError:
             pass
@@ -922,7 +928,7 @@ def build_manager_prompt(
             "",
             "Process exactly one queued task. The Python dispatcher only calls you, not workers.",
             "Your file-action scope is the whole repository working tree passed to Codex, not only the dispatcher skill payload.",
-            "If this skill is nested under skills/dispatcher-skill, repository-level files such as AGENTS.md and skill-migration-memory/ are in scope for non-runtime task work.",
+            "If this skill is nested under .agents/skills/dispatcher-skill or skills/dispatcher-skill, repository-level files such as AGENTS.md and skill-migration-memory/ are in scope for non-runtime task work.",
             "Run dispatcher_app helper commands from the dispatcher skill root; use the command forms below.",
             "Use the worker_catalog as context for worker identities, but do not use Codex subagent tools for workers.",
             "If worker agents are useful, request a dispatcher-owned worker through the local worker client command.",
@@ -933,6 +939,10 @@ def build_manager_prompt(
             "Only the active manager for the current in-progress task can queue worker requests; this is the manager-worker mutex.",
             "Worker execution is transitional: until the dispatcher-owned worker path is verified end to end, you may still implement directly when worker use is unavailable, fails, or would block the task.",
             "Prefer delegating scoped implementation or verification to a worker when it is useful and feasible; after worker execution is proven reliable, manager direct implementation will be restricted.",
+            "Treat worker use as expected for substantial or cross-cutting work, especially when a task touches two or more subsystems, combines UI/backend/runtime/docs changes, requires broad repo search or cleanup, or carries meaningful regression risk.",
+            "Use a worker for independent verification when implementation can continue locally while the worker checks behavior, tests, docs, or missed references.",
+            "Do not queue a worker for simple Q&A, trivial single-file edits, urgent blocking work where the next local step depends on the answer, or when worker use is unavailable, failing, or would block progress.",
+            "If you complete substantial cross-cutting work without a worker, briefly state why in the final result.",
             "When delegating work or verification to a worker, keep the prompt bounded and include ownership, expected output, verification, and the worker role_key.",
             "The dispatcher streams dispatcher-owned worker command/file-change/message events into Activity; do not ask workers to include raw logs or secrets.",
             "When a large user request should be split into optional Todo candidates for the user to choose, write a JSON items file and run:",

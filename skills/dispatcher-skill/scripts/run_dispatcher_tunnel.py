@@ -27,6 +27,7 @@ CONFIG_FILE_NAME = "run-dispatcher-tunnel.json"
 REQUIREMENTS_FILE_NAME = "requirements.md"
 CLOUDFLARED_ENV = "DISPATCHER_CLOUDFLARED"
 CLOUDFLARED_INSTALL_DIR_ENV = "DISPATCHER_CLOUDFLARED_INSTALL_DIR"
+WORKSPACE_ROOT_ENV = "DISPATCHER_WORKSPACE_ROOT"
 RECOMMENDED_CLOUDFLARED_INSTALL_DIR = "~/.local/bin"
 RECOMMENDED_CLOUDFLARED_PATH = "~/.local/bin/cloudflared"
 RESET_CACHE_DIR_NAMES = ("__pycache__", ".pytest_cache")
@@ -188,11 +189,8 @@ def cloudflared_missing_message(repo: Path, *, detail: str | None = None, port: 
 
 
 def session_repo_name(repo: Path) -> str:
-    if repo.name == "dispatcher-skill" and repo.parent.name == "skills":
-        outer_repo = repo.parent.parent
-        if outer_repo.name:
-            return outer_repo.name
-    return repo.name
+    workspace_root = workspace_root_for_path(repo)
+    return workspace_root.name or repo.name
 
 
 def default_init_session(repo: Path) -> str:
@@ -262,15 +260,39 @@ def apply_repo_defaults(args: argparse.Namespace, repo: Path) -> None:
 def dispatcher_env(repo: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update(read_shell_env(local_env_path(repo)))
+    env.setdefault(WORKSPACE_ROOT_ENV, workspace_root_value())
     return env
+
+
+def workspace_root_value() -> str:
+    raw = os.environ.get(WORKSPACE_ROOT_ENV)
+    if raw:
+        return str(workspace_root_for_path(Path(raw).expanduser().resolve()))
+    return str(workspace_root_for_path(Path.cwd().resolve()))
+
+
+def workspace_root_for_path(path: Path) -> Path:
+    path = path.resolve()
+    if path.name == "dispatcher-skill" and path.parent.name == "skills":
+        skills_container = path.parent.parent
+        if skills_container.name == ".agents":
+            return skills_container.parent.resolve()
+        return skills_container.resolve()
+    return path
+
+
+def workspace_root_fallback_command() -> str:
+    value = shlex.quote(workspace_root_value())
+    return f'if [ -z "${{{WORKSPACE_ROOT_ENV}:-}}" ]; then export {WORKSPACE_ROOT_ENV}={value}; fi'
 
 
 def command_with_repo_env(repo: Path, command: str) -> str:
     env_path = local_env_path(repo)
+    workspace_fallback = workspace_root_fallback_command()
     if not env_path.is_file():
-        return command
+        return f"{workspace_fallback}; {command}"
     quoted = shlex.quote(str(env_path))
-    return f"set -a; . {quoted}; set +a; {command}"
+    return f"set -a; . {quoted}; set +a; {workspace_fallback}; {command}"
 
 
 def write_local_state_files(
@@ -286,6 +308,7 @@ def write_local_state_files(
     env_lines = [
         "# Local dispatcher skill runtime settings. This directory is ignored by Git.",
         f"export DISPATCHER_REPO={shlex.quote(str(repo))}",
+        f"export {WORKSPACE_ROOT_ENV}={shlex.quote(workspace_root_value())}",
         f"export DISPATCHER_HOST={shlex.quote(args.host)}",
         f"export DISPATCHER_PORT={shlex.quote(str(port))}",
         f"export DISPATCHER_DB={shlex.quote(args.db)}",
@@ -304,6 +327,7 @@ def write_local_state_files(
     cloudflared_path = str(Path(args.cloudflared).expanduser()) if args.cloudflared else ""
     config = {
         "repo": str(repo),
+        "workspace_root": workspace_root_value(),
         "host": args.host,
         "port": port,
         "db": args.db,
@@ -472,6 +496,7 @@ def initialization_status(repo: Path) -> dict[str, object]:
     return {
         "initialized": not missing_files and env_path.is_file() and not missing_settings,
         "repo": str(repo),
+        "workspace_root": env_values.get(WORKSPACE_ROOT_ENV, ""),
         "requirements_path": str(requirements_path(repo)),
         "requirements_file_exists": requirements_path(repo).is_file(),
         "env_path": str(env_path),
@@ -555,9 +580,12 @@ def find_repo(path_arg: str | None) -> Path:
     for candidate in candidates:
         if (candidate / "dispatcher_app" / "server.py").is_file():
             return candidate
-        nested = candidate / "skills" / "dispatcher-skill"
-        if (nested / "dispatcher_app" / "server.py").is_file():
-            return nested
+        for nested in (
+            candidate / ".agents" / "skills" / "dispatcher-skill",
+            candidate / "skills" / "dispatcher-skill",
+        ):
+            if (nested / "dispatcher_app" / "server.py").is_file():
+                return nested
     raise SystemExit("Could not find dispatcher_app/server.py. Pass --repo /path/to/repo.")
 
 

@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This topic is the durable install/init/start workflow for operating the dispatcher app after this repository is installed as the root `dispatcher-skill`. Keep command detail here and keep root `SKILL.md` concise for user-facing routing.
+This topic is the durable install/init/start workflow for operating the dispatcher app after this repository is installed as the `dispatcher-skill` skill, usually under `<repo>/.agents/skills/dispatcher-skill` for project-local npx installs. Keep command detail here and keep root `SKILL.md` concise for user-facing routing.
 
 This workflow is for operator or host-side runtime operation. Managers running under `codex exec` must not call tmux, Cloudflare tunnel commands, tunnel scripts, or `dispatcher_app.reboot request` directly.
 
 ## Source Of Truth
 
-The operator helper is `scripts/run_dispatcher_tunnel.py`. It detects a repo root by finding `dispatcher_app/server.py`; if `--repo` is omitted, it searches from the current working directory through its parents.
+The operator helper is `scripts/run_dispatcher_tunnel.py`. It detects the dispatcher skill root by finding `dispatcher_app/server.py`; if `--repo` is omitted, it searches the current working directory, parents, and known nested roots such as `.agents/skills/dispatcher-skill` and `skills/dispatcher-skill`.
 
 ## Ordered Flow
 
@@ -87,9 +87,9 @@ python3 scripts/run_dispatcher_tunnel.py foreground --repo <repo> --port <port>
 
 ## Choices
 
-- Repo: use the current working directory unless the user provides `--repo`; the helper validates `dispatcher_app/server.py`, `dispatcher_app/dispatcher.py`, and `dispatcher_app/reboot.py`.
+- Skill root: use `--repo .agents/skills/dispatcher-skill` from a project-local npx install's repository root, `--repo skills/dispatcher-skill` in this source repository, or `--repo .` from the skill root itself. The helper validates `dispatcher_app/server.py`, `dispatcher_app/dispatcher.py`, and `dispatcher_app/reboot.py`.
 - Port: default is `8000`; if the requested port is busy, the helper chooses a free fallback unless `--strict-port` is supplied. Use `--port 0` to always choose a random free port. `init --no-start` requires a concrete port, not `--port 0`.
-- Session: determine the repository name by searching the directory hierarchy instead of guessing from the skill directory name. If the skill root is `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/` as `<repo>`; otherwise use the validated dispatcher root directory name. `init` generates `<repo>-tunnel` when no `--session` or stored session exists. For example, this development repository uses `dispatcher-skill-tunnel`. Other commands use the stored env setting, an explicit `--session`, or the same `<repo>-tunnel` default. The helper addresses tmux sessions with exact `=session` targets internally so `repo-tunnel` and `repo-tunnel-old` style names do not collide through tmux prefix matching.
+- Session: determine the repository name by searching the directory hierarchy instead of guessing from the skill directory name. If the skill root is `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/` as `<repo>`; if it is `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`; otherwise use the validated dispatcher root directory name. `init` generates `<repo>-tunnel` when no `--session` or stored session exists. For example, this development repository uses `dispatcher-skill-tunnel`. Other commands use the stored env setting, an explicit `--session`, or the same `<repo>-tunnel` default. The helper addresses tmux sessions with exact `=session` targets internally so `repo-tunnel` and `repo-tunnel-old` style names do not collide through tmux prefix matching.
 - Password/env: the dispatcher server receives `DISPATCHER_PASSWORD` from the ignored local env file after init. `data/dispatcher.env` is installation-local state, not package payload.
 - Cloudflared: prefer `--cloudflared ~/.local/bin/cloudflared` for a server-local user install, another host-managed binary path, PATH for system installs, or ignored `data/bin/cloudflared` for repo-local throwaway installs. Do not make a large binary part of exported skill payload unless the packaging profile intentionally includes a vetted binary.
 

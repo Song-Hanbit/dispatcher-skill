@@ -69,11 +69,13 @@ let lastTaskCount = 0;
 let refreshQueued = false;
 let statuslineError = "";
 let statuslineTimerId = null;
-let activityPanelCollapsed = true;
-let agentPanelCollapsed = true;
+const compactViewportQuery = window.matchMedia("(max-width: 760px)");
+const compactByDefault = compactViewportQuery.matches;
+let activityPanelCollapsed = compactByDefault;
+let agentPanelCollapsed = compactByDefault;
 let directoryPanelCollapsed = true;
-let taskFormPanelCollapsed = true;
-let queuePanelCollapsed = true;
+let taskFormPanelCollapsed = compactByDefault;
+let queuePanelCollapsed = compactByDefault;
 
 class RequestError extends Error {
   constructor(message, status) {
@@ -864,7 +866,6 @@ function renderDirectory(directory) {
   directoryTreeEl.innerHTML = `
     <div class="tree-root">${escapeHtml(directory?.root || ".")}</div>
     ${rows || '<div class="meta">No entries</div>'}
-    ${directory?.truncated ? '<div class="meta">More entries hidden</div>' : ""}
   `;
   bindDirectoryToggles();
 }

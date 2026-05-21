@@ -5,7 +5,7 @@ description: "Use when Codex is operating this repository as a local dispatcher 
 
 # Dispatcher Skill
 
-Use this skill when this repository is installed or operated as one dispatcher app skill. Runtime and context helpers are part of this skill itself, not nested skills or replacement roots. If the surrounding repository is only an operator container, treat `skills/dispatcher-skill/` as the dispatcher skill root and run source/runtime commands from this directory.
+Use this skill when this repository is installed or operated as one dispatcher app skill. Runtime and context helpers are part of this skill itself, not nested skills or replacement roots. In a project-local `npx skills` install, the skill root is normally `.agents/skills/dispatcher-skill/`; in this source repository, the payload root is `skills/dispatcher-skill/`. Run source/runtime commands from the detected skill root.
 
 ## Structure
 
@@ -21,11 +21,11 @@ Use this skill when this repository is installed or operated as one dispatcher a
 
 When this skill is present in a new install and `init-status` reports uninitialized local state, enter the initialization sequence before runtime work:
 
-1. Identify the skill root. From an outer operator container, pass `--repo skills/dispatcher-skill`; from the skill root, pass `--repo .`.
+1. Identify the skill root. From a repository where npx installed the skill, pass `--repo .agents/skills/dispatcher-skill`; from this source repository, pass `--repo skills/dispatcher-skill`; from the skill root itself, pass `--repo .`.
 2. Review `requirements.md`, especially the host `cloudflared` choice. Prefer an external path through `--cloudflared`, a PATH install, or the operator-local installer target `~/.local/bin/cloudflared` over shipping the binary inside the skill.
 3. Ask the user only for values that are not already available from command args, `DISPATCHER_PASSWORD`, `--password-file`, or existing `data/dispatcher.env`. At minimum, initialization needs a dispatcher password. A requested port is optional; the helper defaults to 8000 and automatically chooses a free fallback when the requested port is busy.
-4. Run `python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared <path> --port <port>` from the skill root when the binary path is known, or the equivalent outer-root command with `--repo skills/dispatcher-skill`. Use `--no-start` only when local env/config should be written without starting tmux or Cloudflare.
-5. Determine the repository name by searching the directory hierarchy, not by guessing from the skill directory. If the skill root is `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/` as `<repo>`; otherwise use the validated dispatcher root directory name.
+4. Run `python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared <path> --port <port>` from the skill root when the binary path is known, or the equivalent outer-root command with `--repo .agents/skills/dispatcher-skill` for project-local npx installs. Use `--no-start` only when local env/config should be written without starting tmux or Cloudflare.
+5. Determine the repository name by searching the directory hierarchy, not by guessing from the skill directory. If the skill root is `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/` as `<repo>`; if it is `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`; otherwise use the validated dispatcher root directory name.
 6. Let the helper default the tmux session name unless the user explicitly overrides it. The default session name is `<repo>-tunnel`, where `<repo>` is the repository name found by that directory search, not the `dispatcher-skill` skill directory name. For example, this development repository uses `dispatcher-skill-tunnel`.
 7. At the end of a successful init/start response, tell the user the command for checking the current Quick Tunnel URL, for example `python3 scripts/run_dispatcher_tunnel.py url --session <session>`.
 
@@ -82,7 +82,7 @@ python3 scripts/run_dispatcher_tunnel.py reset --repo . --confirm-reset
 
 `reset` removes only ignored local runtime state and generated caches, and is a dry run unless `--confirm-reset` is supplied.
 
-For tunnel/runtime operations, use `scripts/run_dispatcher_tunnel.py`; read `memory/runtime-init-workflow.md` for the install/init/start flow. For context handoffs and approved purges, use `scripts/context_compact.py`. From an outer container root, pass `--repo skills/dispatcher-skill` or change directory into `skills/dispatcher-skill` first.
+For tunnel/runtime operations, use `scripts/run_dispatcher_tunnel.py`; read `memory/runtime-init-workflow.md` for the install/init/start flow. For context handoffs and approved purges, use `scripts/context_compact.py`. From a repository root, pass `--repo .agents/skills/dispatcher-skill` for project-local npx installs, pass `--repo skills/dispatcher-skill` in this source repository, or change directory into the detected skill root first.
 
 ## Roles
 
