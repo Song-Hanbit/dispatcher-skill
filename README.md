@@ -6,22 +6,22 @@ Most users should not initialize the runtime by hand. Install the skill with an 
 
 ## Install With npx
 
-Use the skill payload directory, not the repository root:
+Install into the repository where you want Codex to use the dispatcher skill. Use the skill payload directory, not the repository root:
 
 ```bash
-npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -g -a codex -y
+npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -a codex -y
 ```
 
 For a local checkout:
 
 ```bash
-npx skills add ./skills/dispatcher-skill -g -a codex -y
+npx skills add ./skills/dispatcher-skill -a codex -y
 ```
 
 Notes:
 
 - `-a codex` targets Codex.
-- `-g` installs to the user/global skills location. Omit `-g` for a project-local install.
+- Project-local installation is the default here so each repository can carry its own dispatcher skill configuration.
 - `-y` skips interactive confirmation. Omit it if you want to review prompts.
 - After installing, restart Codex so the new skill is discovered.
 
@@ -113,22 +113,22 @@ Dispatcher Skill은 로컬 dispatcher queue를 실행하는 Codex skill입니다
 
 ## npx로 설치
 
-Repository root가 아니라 skill payload 디렉토리를 지정합니다.
+Codex가 dispatcher skill을 사용할 repository 안에 직접 설치하는 것을 기본으로 합니다. Repository root가 아니라 skill payload 디렉토리를 지정합니다.
 
 ```bash
-npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -g -a codex -y
+npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -a codex -y
 ```
 
 로컬 checkout에서 설치하려면:
 
 ```bash
-npx skills add ./skills/dispatcher-skill -g -a codex -y
+npx skills add ./skills/dispatcher-skill -a codex -y
 ```
 
 메모:
 
 - `-a codex`는 Codex를 대상으로 설치한다는 뜻입니다.
-- `-g`는 사용자/global skills 위치에 설치합니다. Project-local 설치를 원하면 `-g`를 빼면 됩니다.
+- 여기서는 repository-local 설치를 기본으로 하므로 각 repository가 자신의 dispatcher skill 설정을 가질 수 있습니다.
 - `-y`는 확인 prompt를 건너뜁니다. 직접 확인하고 싶다면 빼면 됩니다.
 - 설치 후에는 Codex를 다시 시작해야 새 skill이 발견됩니다.
 
