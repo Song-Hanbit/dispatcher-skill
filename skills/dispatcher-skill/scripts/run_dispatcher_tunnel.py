@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--session",
         default=None,
-        help="tmux session name. Defaults to the surrounding repository name.",
+        help="tmux session name. Defaults to <surrounding-repo>-tunnel.",
     )
     parser.add_argument("--replace", action="store_true", help="Replace an existing tmux session on start.")
     parser.add_argument("--url-timeout", default=45, type=float, help="Seconds to wait for a Quick Tunnel URL.")
@@ -196,7 +196,8 @@ def session_repo_name(repo: Path) -> str:
 
 
 def default_init_session(repo: Path) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]+", "-", session_repo_name(repo)).strip("-") or "dispatcher"
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", session_repo_name(repo)).strip("-") or "dispatcher"
+    return f"{slug}-tunnel"
 
 
 def print_json(payload: dict[str, object]) -> None:
