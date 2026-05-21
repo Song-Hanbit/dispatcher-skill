@@ -24,6 +24,8 @@ This file keeps compact, portable working context for installed dispatcher skill
 - Cloudflared should normally be outside exported packages: use `--cloudflared ~/.local/bin/cloudflared`, persisted `DISPATCHER_CLOUDFLARED`, PATH, or ignored `data/bin/cloudflared`; `init-status` prints copy-ready `~/.local/bin` install/init commands; `bin/cloudflared` is only for repo-local or intentionally vetted binary profiles.
 - `memory/release-checklist.md` tracks package include/exclude, secret/runtime cleanup, smoke checks, cloudflared profile, migration/init, reject/pause, and rollback criteria.
 - The web UI Directory section can report the surrounding repository container root when the dispatcher skill is installed under `skills/dispatcher-skill/`, while runtime state remains under the skill's ignored `data/`.
+- Tmux session defaults use the surrounding repository name, not the `dispatcher-skill` directory name, so separate installed copies do not collide on one session.
+- Init/start summaries end with a command for checking the current Quick Tunnel URL; memory and durable docs still omit the generated URL itself.
 - Manager and dispatcher-owned worker calls explicitly set non-interactive approval policy plus `--sandbox workspace-write --cd <repo>` so task-plane agents can edit the skill repo and use SQLite-backed worker requests instead of inheriting a read-only Codex CLI default.
 
 ## Verification Summary

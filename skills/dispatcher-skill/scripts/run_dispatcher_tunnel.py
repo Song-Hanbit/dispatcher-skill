@@ -92,7 +92,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For reset, actually remove ignored local runtime state and generated caches. Without this flag reset is a dry run.",
     )
-    parser.add_argument("--session", default="dispatcher-tunnel", help="tmux session name.")
+    parser.add_argument(
+        "--session",
+        default=None,
+        help="tmux session name. Defaults to the surrounding repository name.",
+    )
     parser.add_argument("--replace", action="store_true", help="Replace an existing tmux session on start.")
     parser.add_argument("--url-timeout", default=45, type=float, help="Seconds to wait for a Quick Tunnel URL.")
     return parser.parse_args()
@@ -183,9 +187,16 @@ def cloudflared_missing_message(repo: Path, *, detail: str | None = None, port: 
     return "\n".join(lines)
 
 
+def session_repo_name(repo: Path) -> str:
+    if repo.name == "dispatcher-skill" and repo.parent.name == "skills":
+        outer_repo = repo.parent.parent
+        if outer_repo.name:
+            return outer_repo.name
+    return repo.name
+
+
 def default_init_session(repo: Path) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", repo.name).strip("-") or "dispatcher"
-    return f"{slug}-tunnel"
+    return re.sub(r"[^a-zA-Z0-9_-]+", "-", session_repo_name(repo)).strip("-") or "dispatcher"
 
 
 def print_json(payload: dict[str, object]) -> None:
@@ -240,6 +251,11 @@ def apply_local_defaults(args: argparse.Namespace, repo: Path) -> None:
         args.cloudflared = values[CLOUDFLARED_ENV]
     if not option_was_supplied("--cloudflared-install-dir") and values.get(CLOUDFLARED_INSTALL_DIR_ENV):
         args.cloudflared_install_dir = values[CLOUDFLARED_INSTALL_DIR_ENV]
+
+
+def apply_repo_defaults(args: argparse.Namespace, repo: Path) -> None:
+    if not option_was_supplied("--session") and not args.session:
+        args.session = default_init_session(repo)
 
 
 def dispatcher_env(repo: Path) -> dict[str, str]:
@@ -731,6 +747,14 @@ def tmux_access_error(result: subprocess.CompletedProcess[str]) -> bool:
     return "operation not permitted" in stderr or "permission denied" in stderr
 
 
+def tmux_session_target(session: str) -> str:
+    return f"={session}"
+
+
+def tmux_window_target(session: str, window: str) -> str:
+    return f"={session}:{window}"
+
+
 def require_tmux_access(result: subprocess.CompletedProcess[str]) -> None:
     if result.returncode != 0 and tmux_access_error(result):
         detail = result.stderr.strip() or "tmux command failed."
@@ -738,13 +762,13 @@ def require_tmux_access(result: subprocess.CompletedProcess[str]) -> None:
 
 
 def tmux_session_exists(session: str) -> bool:
-    result = tmux_run("has-session", "-t", session, check=False)
+    result = tmux_run("has-session", "-t", tmux_session_target(session), check=False)
     require_tmux_access(result)
     return result.returncode == 0
 
 
 def tmux_window_exists(session: str, window: str) -> bool:
-    result = tmux_run("has-session", "-t", f"{session}:{window}", check=False)
+    result = tmux_run("has-session", "-t", tmux_window_target(session, window), check=False)
     require_tmux_access(result)
     return result.returncode == 0
 
@@ -766,7 +790,7 @@ def quick_url_from_text(text: str) -> str | None:
 
 def wait_for_quick_url(session: str, timeout: float) -> str | None:
     deadline = time.time() + timeout
-    target = f"{session}:tunnel"
+    target = tmux_window_target(session, "tunnel")
     while time.time() < deadline:
         url = quick_url_from_text(tmux_capture(target))
         if url:
@@ -783,23 +807,24 @@ def print_tmux_summary(session: str, local_url: str, quick_url: str | None) -> N
         print(f"Quick Tunnel URL: {quick_url}", flush=True)
     else:
         print("Quick Tunnel URL not found yet. Inspect with:", flush=True)
-        print(f"tmux capture-pane -pt {session}:tunnel -S -200", flush=True)
-    print(f"Attach: tmux attach -t {session}", flush=True)
+        print(f"tmux capture-pane -pt ={session}:tunnel -S -200", flush=True)
+    print(f"Attach: tmux attach -t ={session}", flush=True)
     print(f"Restart server and dispatcher: {sys.argv[0]} restart --session {session}", flush=True)
     print(f"Restart server only: {sys.argv[0]} restart-server --session {session}", flush=True)
     print(f"Restart dispatcher only: {sys.argv[0]} restart-dispatcher --session {session}", flush=True)
     print(f"Restart reboot watcher only: {sys.argv[0]} restart-reboot --session {session}", flush=True)
     print("Manager restart marker after task completion:", flush=True)
     print("REBOOT_AFTER_TASK restart-dispatcher <reason>", flush=True)
-    print(f"Stop: tmux kill-session -t {session}", flush=True)
+    print(f"Stop: tmux kill-session -t ={session}", flush=True)
+    print(f"Check Quick Tunnel URL: {sys.argv[0]} url --session {session}", flush=True)
 
 
 def ensure_reboot_window(args: argparse.Namespace, repo: Path, port: int) -> None:
     if tmux_window_exists(args.session, "reboot"):
         return
     cmd = command_with_repo_env(repo, shell_join(reboot_command(args, repo, port)))
-    tmux_run("new-window", "-t", args.session, "-n", "reboot", "-c", str(repo))
-    tmux_run("send-keys", "-t", f"{args.session}:reboot", cmd, "C-m")
+    tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "reboot", "-c", str(repo))
+    tmux_run("send-keys", "-t", tmux_window_target(args.session, "reboot"), cmd, "C-m")
 
 
 def start_tmux(args: argparse.Namespace, repo: Path, cloudflared: str) -> int:
@@ -809,7 +834,7 @@ def start_tmux(args: argparse.Namespace, repo: Path, cloudflared: str) -> int:
             print(f"tmux session '{args.session}' already exists.", file=sys.stderr)
             print(f"Use --replace to recreate it, or run: {sys.argv[0]} restart", file=sys.stderr)
             return 1
-        tmux_run("kill-session", "-t", args.session, check=False)
+        tmux_run("kill-session", "-t", tmux_session_target(args.session), check=False)
         wait_for_port_available(args.host, args.port)
 
     port = int(getattr(args, "resolved_port", 0) or choose_port(args.host, args.port, args.strict_port))
@@ -822,14 +847,14 @@ def start_tmux(args: argparse.Namespace, repo: Path, cloudflared: str) -> int:
     print(f"Repository: {repo}", flush=True)
     print(f"Starting tmux session '{args.session}' with server, dispatcher, reboot, and tunnel windows.", flush=True)
     tmux_run("new-session", "-d", "-s", args.session, "-n", "server", "-c", str(repo))
-    tmux_run("send-keys", "-t", f"{args.session}:server", server_cmd, "C-m")
+    tmux_run("send-keys", "-t", tmux_window_target(args.session, "server"), server_cmd, "C-m")
     wait_for_server(f"{local_url}/")
-    tmux_run("new-window", "-t", args.session, "-n", "dispatcher", "-c", str(repo))
-    tmux_run("send-keys", "-t", f"{args.session}:dispatcher", dispatcher_cmd, "C-m")
-    tmux_run("new-window", "-t", args.session, "-n", "reboot", "-c", str(repo))
-    tmux_run("send-keys", "-t", f"{args.session}:reboot", reboot_cmd, "C-m")
-    tmux_run("new-window", "-t", args.session, "-n", "tunnel", "-c", str(repo))
-    tmux_run("send-keys", "-t", f"{args.session}:tunnel", tunnel_cmd, "C-m")
+    tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "dispatcher", "-c", str(repo))
+    tmux_run("send-keys", "-t", tmux_window_target(args.session, "dispatcher"), dispatcher_cmd, "C-m")
+    tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "reboot", "-c", str(repo))
+    tmux_run("send-keys", "-t", tmux_window_target(args.session, "reboot"), reboot_cmd, "C-m")
+    tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "tunnel", "-c", str(repo))
+    tmux_run("send-keys", "-t", tmux_window_target(args.session, "tunnel"), tunnel_cmd, "C-m")
     quick_url = wait_for_quick_url(args.session, args.url_timeout)
     print_tmux_summary(args.session, local_url, quick_url)
     return 0
@@ -846,16 +871,16 @@ def restart_server(args: argparse.Namespace, repo: Path) -> int:
         raise SystemExit("restart-server requires a concrete --port value.")
     local_url = f"http://{args.host}:{port}"
     cmd = command_with_repo_env(repo, shell_join(server_command(args, port)))
-    target = f"{args.session}:server"
+    target = tmux_window_target(args.session, "server")
     if tmux_window_exists(args.session, "server"):
         tmux_run("send-keys", "-t", target, "C-c", check=False)
         time.sleep(0.5)
     else:
-        tmux_run("new-window", "-t", args.session, "-n", "server", "-c", str(repo))
+        tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "server", "-c", str(repo))
     tmux_run("send-keys", "-t", target, cmd, "C-m")
     wait_for_server(f"{local_url}/")
     ensure_reboot_window(args, repo, port)
-    quick_url = quick_url_from_text(tmux_capture(f"{args.session}:tunnel"))
+    quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
     print_tmux_summary(args.session, local_url, quick_url)
     return 0
 
@@ -867,16 +892,16 @@ def restart_dispatcher(args: argparse.Namespace, repo: Path) -> int:
         return 1
 
     cmd = command_with_repo_env(repo, shell_join(dispatcher_command(args)))
-    target = f"{args.session}:dispatcher"
+    target = tmux_window_target(args.session, "dispatcher")
     if tmux_window_exists(args.session, "dispatcher"):
         tmux_run("send-keys", "-t", target, "C-c", check=False)
         time.sleep(0.5)
     else:
-        tmux_run("new-window", "-t", args.session, "-n", "dispatcher", "-c", str(repo))
+        tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "dispatcher", "-c", str(repo))
     tmux_run("send-keys", "-t", target, cmd, "C-m")
     local_url = f"http://{args.host}:{args.port}"
     ensure_reboot_window(args, repo, args.port)
-    quick_url = quick_url_from_text(tmux_capture(f"{args.session}:tunnel"))
+    quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
     print_tmux_summary(args.session, local_url, quick_url)
     return 0
 
@@ -891,15 +916,15 @@ def restart_reboot(args: argparse.Namespace, repo: Path) -> int:
     if port == 0:
         raise SystemExit("restart-reboot requires a concrete --port value.")
     cmd = command_with_repo_env(repo, shell_join(reboot_command(args, repo, port)))
-    target = f"{args.session}:reboot"
+    target = tmux_window_target(args.session, "reboot")
     if tmux_window_exists(args.session, "reboot"):
         tmux_run("send-keys", "-t", target, "C-c", check=False)
         time.sleep(0.5)
     else:
-        tmux_run("new-window", "-t", args.session, "-n", "reboot", "-c", str(repo))
+        tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "reboot", "-c", str(repo))
     tmux_run("send-keys", "-t", target, cmd, "C-m")
     local_url = f"http://{args.host}:{port}"
-    quick_url = quick_url_from_text(tmux_capture(f"{args.session}:tunnel"))
+    quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
     print_tmux_summary(args.session, local_url, quick_url)
     return 0
 
@@ -916,7 +941,7 @@ def print_url(args: argparse.Namespace) -> int:
     if not tmux_session_exists(args.session):
         print(f"tmux session '{args.session}' does not exist.", file=sys.stderr)
         return 1
-    quick_url = quick_url_from_text(tmux_capture(f"{args.session}:tunnel"))
+    quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
     if not quick_url:
         print("Quick Tunnel URL not found in tunnel window.", file=sys.stderr)
         return 1
@@ -932,7 +957,7 @@ def print_status(args: argparse.Namespace) -> int:
         for window in ("server", "dispatcher", "reboot", "tunnel"):
             status = "present" if tmux_window_exists(args.session, window) else "absent"
             print(f"window {window}: {status}", flush=True)
-        quick_url = quick_url_from_text(tmux_capture(f"{args.session}:tunnel"))
+        quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
         if quick_url:
             print(f"Quick Tunnel URL: {quick_url}", flush=True)
     return 0
@@ -941,7 +966,7 @@ def print_status(args: argparse.Namespace) -> int:
 def stop_tmux(args: argparse.Namespace) -> int:
     require_tmux()
     if tmux_session_exists(args.session):
-        tmux_run("kill-session", "-t", args.session)
+        tmux_run("kill-session", "-t", tmux_session_target(args.session))
         print(f"Stopped tmux session '{args.session}'.", flush=True)
     else:
         print(f"tmux session '{args.session}' is not running.", flush=True)
@@ -1070,6 +1095,7 @@ def main() -> int:
     args = parse_args()
     repo = find_repo(args.repo)
     apply_local_defaults(args, repo)
+    apply_repo_defaults(args, repo)
 
     if args.command == "install-cloudflared":
         install_cloudflared(repo, args.cloudflared_install_dir)

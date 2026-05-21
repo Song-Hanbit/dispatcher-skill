@@ -48,6 +48,14 @@ python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path>
 
 `init` verifies the repo root, resolves host/port/session choices, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `data/dispatcher.env` and `data/run-dispatcher-tunnel.json`.
 
+At the end of a successful init/start response, include the command for checking the current Quick Tunnel URL, such as:
+
+```bash
+python3 scripts/run_dispatcher_tunnel.py url --session <session>
+```
+
+Do not store the generated URL itself in memory or durable docs.
+
 Password input choices are, in priority order: `--password`, `--password-file`, `DISPATCHER_PASSWORD`, an existing `data/dispatcher.env`, then an interactive prompt when a TTY is available. Prefer `--password-file`, `DISPATCHER_PASSWORD`, or prompt for real secrets. Do not print or copy passwords into memory.
 
 Cloudflared input choices are, in priority order: `--cloudflared`, persisted `DISPATCHER_CLOUDFLARED`, ignored local `data/bin/cloudflared`, PATH `cloudflared`, then optional package-local `bin/cloudflared` when a profile intentionally ships it. `init` persists a resolved `--cloudflared` or installer path into `data/dispatcher.env`.
@@ -81,7 +89,7 @@ python3 scripts/run_dispatcher_tunnel.py foreground --repo <repo> --port <port>
 
 - Repo: use the current working directory unless the user provides `--repo`; the helper validates `dispatcher_app/server.py`, `dispatcher_app/dispatcher.py`, and `dispatcher_app/reboot.py`.
 - Port: default is `8000`; if the requested port is busy, the helper chooses a free fallback unless `--strict-port` is supplied. Use `--port 0` to always choose a random free port. `init --no-start` requires a concrete port, not `--port 0`.
-- Session: `init` generates `<repo-name>-tunnel` when no `--session` or stored session exists. Other commands default to `dispatcher-tunnel` unless `--session` or stored env settings provide a value.
+- Session: `init` generates the surrounding repository name when no `--session` or stored session exists. If the skill root is `<repo>/skills/dispatcher-skill`, the session name is `<repo>`'s directory name, not `dispatcher-skill`. Other commands use the stored env setting, an explicit `--session`, or the same repository-name default. The helper addresses tmux sessions with exact `=session` targets internally so `repo` and `repo-old` style names do not collide through tmux prefix matching.
 - Password/env: the dispatcher server receives `DISPATCHER_PASSWORD` from the ignored local env file after init. `data/dispatcher.env` is installation-local state, not package payload.
 - Cloudflared: prefer `--cloudflared ~/.local/bin/cloudflared` for a server-local user install, another host-managed binary path, PATH for system installs, or ignored `data/bin/cloudflared` for repo-local throwaway installs. Do not make a large binary part of exported skill payload unless the packaging profile intentionally includes a vetted binary.
 
