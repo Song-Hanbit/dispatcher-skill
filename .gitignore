@@ -32,3 +32,6 @@ skill-migration-memory/
 
 # Optional large local binary; exported packages should provide cloudflared externally
 skills/dispatcher-skill/bin/cloudflared
+
+# Skill repo tests
+tests/
