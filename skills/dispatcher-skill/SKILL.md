@@ -16,6 +16,7 @@ Use this skill when this repository is installed or operated as one dispatcher a
 - `bin/cloudflared`: optional fallback Cloudflare tunnel binary for repo-local or exported-with-binary profiles; exported slim packages should omit it and use an external or local-state binary path.
 - `memory/`: durable project memory. Read `memory/memory.md` first, then the specific topic needed.
 - `data/`: ignored installation-local runtime state, including `dispatcher.env`, runtime config, SQLite DBs, logs, reboot state, and lock files. Do not package or copy it into memory.
+- `dispatcher_app/agents.json`: ignored per-install agent handle registry generated during init or first direct runtime use.
 
 ## Initialization Trigger
 
@@ -95,7 +96,7 @@ For tunnel/runtime operations, use `scripts/run_dispatcher_tunnel.py`; read `mem
 
 Package source and docs, not local state. `dispatcher_app/` is shipped as source/runtime code, but each install creates its own local runtime state after bootstrap.
 
-Exclude `data/`, generated caches, local DBs, local logs, lock/token files, secrets, local tunnel URLs, raw transcripts, prompts, stdout/stderr dumps, full JSONL records, and unvetted large binaries from package payloads and durable memory.
+Exclude `data/`, generated caches, local DBs, local logs, `dispatcher_app/agents.json`, lock/token files, secrets, local tunnel URLs, raw transcripts, prompts, stdout/stderr dumps, full JSONL records, and unvetted large binaries from package payloads and durable memory.
 
 See `memory/skill-packaging.md` for the durable package include/exclude and binary policy.
 

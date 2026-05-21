@@ -7,7 +7,7 @@ Use this checklist before handing off a packaged `dispatcher-skill` artifact. Th
 - [ ] Include root `SKILL.md`, `requirements.md`, selected final docs distilled from `memory/`, `dispatcher_app/`, `scripts/`, and optional `bin/cloudflared` according to the selected packaging profile. Include a skill-local `AGENTS.md` only if one is intentionally added to the payload.
 - [ ] Include `dispatcher_app/` as source/runtime code only; runtime state must be created locally after install/init.
 - [ ] Treat `scripts/run_dispatcher_tunnel.py` and `scripts/context_compact.py` as integrated helper capabilities, not replacement roots.
-- [ ] Exclude `data/`, SQLite DBs, audit logs, reboot state, local lock/token/PID/socket state, local env files, and local tunnel URLs.
+- [ ] Exclude `data/`, `dispatcher_app/agents.json`, SQLite DBs, audit logs, reboot state, local lock/token/PID/socket state, local env files, and local tunnel URLs.
 - [ ] Exclude generated caches, bytecode, `.pytest_cache/`, temporary outputs, migration scratch files, raw logs, full transcripts, prompts, stdout/stderr dumps, full JSONL records, passwords, tokens, and other secrets.
 - [ ] Run `python3 scripts/run_dispatcher_tunnel.py reset --repo <candidate>` first as a dry run, review the target list, then use `--confirm-reset` only on the candidate tree when deleting ignored local state and generated caches is intended.
 
@@ -36,6 +36,7 @@ python3 scripts/smoke_skill_package.py --repo <candidate>
 ## Migration Init
 
 - [ ] In the copied/installed candidate, run `init-status --repo <candidate>` before runtime work to detect whether ignored local state exists.
+- [ ] Confirm `dispatcher_app/agents.json` is absent from package payload before init, then generated locally with empty handles by init or first direct runtime use.
 - [ ] Confirm `init-status --repo <candidate>` presents copy-ready `~/.local/bin` install/init commands when `cloudflared` is missing or unconfigured.
 - [ ] For operator-approved setup, run `init --repo <candidate> --cloudflared ~/.local/bin/cloudflared --port <port>` after the suggested install, or use another host-approved binary path.
 - [ ] Confirm `init` persists the chosen binary path in `data/dispatcher.env` as `DISPATCHER_CLOUDFLARED`.

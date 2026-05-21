@@ -1,6 +1,6 @@
 # Agent Registry Memory
 
-Agent identities are stored in `dispatcher_app/agents.json`. Keep JSON limited to agent identity fields; keep policy and descriptions in this Markdown file.
+Agent identities are stored in the per-install local file `dispatcher_app/agents.json`. Keep JSON limited to agent identity fields; keep policy and descriptions in this Markdown file. The file is ignored by Git and generated for each repository during initialization or first direct runtime use, so packaged skills do not ship another repo's Codex handles.
 
 For operator cognition flow, start from the root `dispatcher-skill` entrypoint and `memory/memory.md`, then follow `memory/operator-onboarding.md`: runtime audit, runtime mutex acquisition, addressed handoff processing, and only then substantive work.
 
@@ -13,6 +13,7 @@ For operator cognition flow, start from the root `dispatcher-skill` entrypoint a
 - Do not store model provider tokens, OpenAI keys, Cloudflare tokens, passwords, or other secrets here.
 - If an agent role is renamed, keep the old `role_key` until existing tasks and logs no longer reference it.
 - `dispatcher_app/agents.json` should contain only `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`.
+- `dispatcher_app/agent_registry.py` owns the default registry schema and generation helper.
 - Access rules, purpose text, lifecycle notes, and UI behavior belong in this file, not in JSON.
 
 ## Access Policy
@@ -45,10 +46,10 @@ The same helper has guarded purge commands for approved cleanup: `purge-tasks` s
 - Worker `role_key` values use `worker.<slug>`.
 - Managers should call workers through `python3 -m dispatcher_app.worker_client call`, not Codex subagent tools.
 - The worker client can create a request only while the manager owns the current `in_progress` task and the task-plane runtime mutex.
-- The dispatcher loop runs pending worker requests through `dispatcher_app/worker_runner.py` and stores dispatcher-owned worker Codex session handles in `dispatcher_app/agents.json`.
+- The dispatcher loop runs pending worker requests through `dispatcher_app/worker_runner.py` and stores dispatcher-owned worker Codex session handles in the ignored local `dispatcher_app/agents.json`.
 - `key_status=dispatcher_ready` means the worker key is a dispatcher-owned Codex session that `worker_runner.py` can resume. Older `ready` worker keys may be legacy Codex harness subagent handles and are not resumed by `worker_runner.py`.
 - Worker requests are serialized per manager task: only one `pending` or `running` worker request is allowed at a time.
-- `dispatcher_app/agents.json` is the worker catalog given to managers when they need to select or reuse workers.
+- `dispatcher_app/agents.json` is the per-repository worker catalog given to managers when they need to select or reuse workers.
 - Managers choose dispatcher-owned worker display names when initializing or renaming a worker request by passing `--worker-name` to `dispatcher_app.worker_client`; the dispatcher persists that display name in `agents.json`.
 - Worker reuse must avoid conflicting active tasks.
 - Manager tasks should treat worker use as expected for substantial or cross-cutting work, especially when a task touches two or more subsystems, combines UI/backend/runtime/docs changes, requires broad repo search or cleanup, or carries meaningful regression risk.

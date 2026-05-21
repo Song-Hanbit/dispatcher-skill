@@ -34,6 +34,7 @@ RESET_CACHE_DIR_NAMES = ("__pycache__", ".pytest_cache")
 RESET_BYTECODE_SUFFIXES = (".pyc", ".pyo")
 REQUIRED_REPO_FILES = (
     REQUIREMENTS_FILE_NAME,
+    "dispatcher_app/agent_registry.py",
     "dispatcher_app/server.py",
     "dispatcher_app/dispatcher.py",
     "dispatcher_app/reboot.py",
@@ -133,6 +134,44 @@ def local_config_path(repo: Path) -> Path:
 
 def requirements_path(repo: Path) -> Path:
     return repo / REQUIREMENTS_FILE_NAME
+
+
+def agents_path(repo: Path) -> Path:
+    return repo / "dispatcher_app" / "agents.json"
+
+
+def import_agent_registry(repo: Path):
+    repo_entry = str(repo)
+    if repo_entry not in sys.path:
+        sys.path.insert(0, repo_entry)
+    from dispatcher_app.agent_registry import ensure_agents_file, read_agent_registry
+
+    return ensure_agents_file, read_agent_registry
+
+
+def ensure_agent_registry(repo: Path) -> bool:
+    ensure_agents_file, _ = import_agent_registry(repo)
+    return bool(ensure_agents_file(agents_path(repo)))
+
+
+def agent_registry_status(repo: Path) -> dict[str, object]:
+    path = agents_path(repo)
+    exists = path.is_file()
+    valid = False
+    error = ""
+    if exists:
+        try:
+            _, read_agent_registry = import_agent_registry(repo)
+            read_agent_registry(path)
+            valid = True
+        except Exception as exc:
+            error = str(exc)
+    return {
+        "agents_path": str(path),
+        "agents_file_exists": exists,
+        "agents_file_valid": valid,
+        "agents_error": error,
+    }
 
 
 def repo_relative_path(repo: Path, raw_path: str | Path) -> Path:
@@ -476,6 +515,7 @@ def cloudflared_availability(repo: Path, path_arg: str | None) -> dict[str, obje
 
 def initialization_status(repo: Path) -> dict[str, object]:
     missing_files = [path for path in REQUIRED_REPO_FILES if not (repo / path).is_file()]
+    agents_status = agent_registry_status(repo)
     env_path = local_env_path(repo)
     config_path = local_config_path(repo)
     env_values = read_shell_env(env_path)
@@ -494,7 +534,12 @@ def initialization_status(repo: Path) -> dict[str, object]:
     cloudflared_status = cloudflared_availability(repo, cloudflared_config or None)
     cloudflared_commands = cloudflared_user_bin_commands(repo)
     return {
-        "initialized": not missing_files and env_path.is_file() and not missing_settings,
+        "initialized": (
+            not missing_files
+            and bool(agents_status["agents_file_valid"])
+            and env_path.is_file()
+            and not missing_settings
+        ),
         "repo": str(repo),
         "workspace_root": env_values.get(WORKSPACE_ROOT_ENV, ""),
         "requirements_path": str(requirements_path(repo)),
@@ -513,6 +558,7 @@ def initialization_status(repo: Path) -> dict[str, object]:
         "cloudflared_install_dir": cloudflared_install_dir or str(local_bin_dir(repo)),
         "cloudflared_user_bin_install_command": cloudflared_commands["install"],
         "cloudflared_user_bin_init_command": cloudflared_commands["init"],
+        **agents_status,
         **cloudflared_status,
     }
 
@@ -1080,6 +1126,7 @@ def run_foreground(args: argparse.Namespace, repo: Path, cloudflared: str) -> in
 
 def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
     validate_repo_requirements(repo)
+    agents_created = ensure_agent_registry(repo)
     existing = read_shell_env(local_env_path(repo))
     if not option_was_supplied("--session") and not existing.get("DISPATCHER_SESSION"):
         args.session = default_init_session(repo)
@@ -1108,6 +1155,10 @@ def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
         require_tmux()
 
     write_local_state_files(repo, args, password=password, port=port)
+    if agents_created:
+        print(f"Created local agent registry at {agents_path(repo)}", flush=True)
+    else:
+        print(f"Verified local agent registry at {agents_path(repo)}", flush=True)
     print(f"Initialized dispatcher skill runtime state in {local_state_dir(repo)}", flush=True)
     print(f"Repository: {repo}", flush=True)
     print(f"Configured local URL: http://{args.host}:{port}", flush=True)

@@ -16,7 +16,7 @@ The root skill should describe the whole repository as one dispatcher app skill.
 
 ## Packaged Source
 
-`dispatcher_app/` is packaged as the source and runtime code for the dispatcher app. It includes the web server, queue loop, Codex runner boundary, worker client/runner, reboot watcher, runtime lock helper, static assets, templates, schema files, and agent identity registry.
+`dispatcher_app/` is packaged as the source and runtime code for the dispatcher app. It includes the web server, queue loop, Codex runner boundary, worker client/runner, reboot watcher, runtime lock helper, static assets, templates, schema files, and the agent registry generator. The per-install `dispatcher_app/agents.json` identity state is generated locally and is not package content.
 
 Runtime state is local to each installation and is not shipped as package content. The app creates or updates local state after install/bootstrap/runtime, including SQLite databases, runtime logs, lock/token files, generated tunnel settings, and local environment files.
 
@@ -30,7 +30,7 @@ Package current source and final documentation needed to operate the dispatcher 
 
 - Root `SKILL.md` and selected final docs distilled from portable project memory. Include a skill-local `AGENTS.md` only if one is intentionally added to the payload; operator-container instructions and migration memory are not package payload.
 - `requirements.md` so operators can verify Python, Codex, tmux, network, and cloudflared expectations before initialization.
-- `dispatcher_app/` source code, templates, static assets, schemas, and non-secret registry metadata.
+- `dispatcher_app/` source code, templates, static assets, schemas, and the non-secret registry generation helper.
 - Helper scripts under `scripts/run_dispatcher_tunnel.py` and `scripts/context_compact.py`.
 - Policy-managed `bin/cloudflared` only when the selected packaging profile intentionally includes a vetted binary.
 - `.gitignore` and other non-secret repo metadata needed for local operation.
@@ -87,6 +87,7 @@ Without `--confirm-reset`, this is a dry run that lists ignored local state and 
 Do not package local runtime or machine-specific state:
 
 - `data/`, including runtime logs, SQLite DBs, reboot state, request logs, local lock/token state, and agent conversation records.
+- Per-install `dispatcher_app/agents.json` registry state; `dispatcher_app/agent_registry.py` recreates a default registry with empty handles during init or first direct runtime use.
 - Generated caches such as `__pycache__/`, `.pytest_cache/`, bytecode, temporary outputs, and downloaded build artifacts.
 - Secrets, passwords, Cloudflare tokens, local tunnel URLs, shell history, raw logs, full transcripts, prompts, stdout/stderr dumps, and full JSONL records.
 - Host-specific process state such as tmux session state, PID files, sockets, and lock tokens.

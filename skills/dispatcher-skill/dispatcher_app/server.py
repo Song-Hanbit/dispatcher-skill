@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .agent_registry import ensure_agents_file, read_agent_registry
+
 
 STATUSES = [
     "inbox",
@@ -64,6 +66,7 @@ PROJECT_NAME = REPO_ROOT.name or "Dispatcher"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 AGENTS_PATH = BASE_DIR / "agents.json"
+ensure_agents_file(AGENTS_PATH)
 GLOBAL_RUNTIME_LOCK = "global_execution"
 TREE_EXCLUDED_NAMES = {
     "__pycache__",
@@ -133,7 +136,7 @@ def timestamp_to_unix(value: Any) -> float:
 
 
 def list_agent_states(store: "Store") -> list[dict[str, Any]]:
-    raw = json.loads(AGENTS_PATH.read_text(encoding="utf-8"))
+    raw = read_agent_registry(AGENTS_PATH)
     runtimes = {
         runtime["role_key"]: runtime
         for runtime in store.list_manager_runtime()
@@ -244,7 +247,7 @@ def is_worker_activity_running(worker_activity: dict[str, Any] | None) -> bool:
 
 
 def list_manager_activity(store: "Store") -> list[dict[str, Any]]:
-    raw = json.loads(AGENTS_PATH.read_text(encoding="utf-8"))
+    raw = read_agent_registry(AGENTS_PATH)
     runtimes = {
         runtime["role_key"]: runtime
         for runtime in store.list_manager_runtime()

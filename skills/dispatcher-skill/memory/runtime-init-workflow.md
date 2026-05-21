@@ -46,7 +46,7 @@ When `cloudflared` is missing or unconfigured, `init-status` also prints copy-re
 python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path> --port <port>
 ```
 
-`init` verifies the repo root, resolves host/port/session choices, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `data/dispatcher.env` and `data/run-dispatcher-tunnel.json`.
+`init` verifies the repo root, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`.
 
 At the end of a successful init/start response, include the command for checking the current Quick Tunnel URL, such as:
 

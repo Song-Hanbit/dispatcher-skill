@@ -10,8 +10,8 @@
 - Use Cloudflare Quick Tunnel for temporary mobile/public access.
 - Keep skill instructions in root `SKILL.md`, detailed portable project memory in `memory/`, and deterministic operational helpers in `scripts/`. Operator-container instructions and migration notes stay outside the shippable skill payload.
 - Name the user-managed debugging and maintenance agent `operator`; keep it outside the dispatcher-managed manager/worker task plane.
-- Store all known Codex agent handles in `dispatcher_app/agents.json`, while limiting queued task dispatch to managers and worker invocation to active manager-authored worker requests.
-- Keep `agents.json` as an agent handle registry, but have managers invoke workers through `dispatcher_app.worker_client` so dispatcher-owned worker runs can be tracked in SQLite and Activity.
+- Store all known Codex agent handles in the ignored per-repository `dispatcher_app/agents.json`, while limiting queued task dispatch to managers and worker invocation to active manager-authored worker requests.
+- Keep `agents.json` as a generated local agent handle registry, but have managers invoke workers through `dispatcher_app.worker_client` so dispatcher-owned worker runs can be tracked in SQLite and Activity.
 - Run the web server, dispatcher loop, reboot watcher, and tunnel as separate processes; tmux should keep `server`, `dispatcher`, `reboot`, and `tunnel` windows alive.
 - Managers must not control tmux directly or run `dispatcher_app.reboot request` from inside `codex exec`. Runtime restarts requested by managers use final-result `REBOOT_AFTER_TASK <command> <reason>` markers; after marking the task done, the dispatcher strips the marker from the stored result and appends the validated host-side reboot request for the `reboot` tmux window to apply.
 - Keep queued task dispatch manager-only. The dispatcher may execute worker requests only after the active manager queues one for the active task; it must not assign pending user tasks directly to workers.

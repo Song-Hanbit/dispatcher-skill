@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .agent_registry import ensure_agents_file, read_agent_registry
 from .codex_runner import CodexManagerRunner, CodexRunCancelled
 from .reboot import append_reboot_request, normalize_command, unprocessed_request_count
 from .server import GLOBAL_RUNTIME_LOCK, Store
@@ -44,11 +45,10 @@ class ParsedPostTaskReboots:
 class AgentRegistry:
     def __init__(self, path: Path):
         self.path = path
+        ensure_agents_file(self.path)
 
     def load(self) -> list[AgentRecord]:
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
-        if raw.get("key_type") != "codex_agent_handle":
-            raise ValueError("agents.json key_type must be codex_agent_handle")
+        raw = read_agent_registry(self.path)
 
         agents = []
         for item in raw.get("agents", []):
@@ -107,7 +107,7 @@ class AgentRegistry:
         key_status: str | None = None,
         name: str | None = None,
     ) -> None:
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = read_agent_registry(self.path)
         changed = False
         for item in raw.get("agents", []):
             if item.get("role_key") == role_key:

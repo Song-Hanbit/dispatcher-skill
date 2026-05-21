@@ -5,6 +5,8 @@ __pycache__/
 
 # Local dispatcher/runtime state
 data/
+dispatcher_app/agents.json
+skills/dispatcher-skill/dispatcher_app/agents.json
 *.db
 *.db-*
 *.sqlite
