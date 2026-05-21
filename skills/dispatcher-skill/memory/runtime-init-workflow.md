@@ -48,10 +48,12 @@ python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path>
 
 `init` verifies the repo root, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`.
 
-At the end of a successful init/start response, include the command for checking the current Quick Tunnel URL, such as:
+After `init` creates the default `dispatcher_app/agents.json`, complete any known missing local agent fields before relying on the runtime. Keep the file limited to `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`; leave unknown Codex handles as `null` with `key_status: "missing"` so the dispatcher can populate them on first use. Do not add secrets, provider tokens, passwords, tunnel URLs, policy text, or lifecycle notes to `agents.json`.
+
+At the end of a successful init/start response, include a no-`cd` command for checking the current Quick Tunnel URL. Prefer a command that includes both the helper script path and `--repo`, such as this project-local repository-root form:
 
 ```bash
-python3 scripts/run_dispatcher_tunnel.py url --session <session>
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py url --repo .agents/skills/dispatcher-skill --session <session>
 ```
 
 Do not store the generated URL itself in memory or durable docs.

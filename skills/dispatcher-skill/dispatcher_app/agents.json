@@ -11,8 +11,8 @@
     {
       "role_key": "manager.default",
       "name": "Manager",
-      "key": null,
-      "key_status": "missing"
+      "key": "019e497b-04df-7433-aca5-6eb768860c21",
+      "key_status": "ready"
     },
     {
       "role_key": "worker.default",

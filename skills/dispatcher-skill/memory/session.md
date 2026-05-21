@@ -6,7 +6,7 @@ This file keeps compact, portable working context for installed dispatcher skill
 
 - The skill has no required active runtime at rest. Local initialization and runtime state are created inside ignored `data/`.
 - Runtime helper state lives in `data/dispatcher.env` and `data/run-dispatcher-tunnel.json`; do not copy their contents into memory.
-- Quick Tunnel URLs are intentionally not stored here. When a tunnel is running, retrieve the current URL with `python3 scripts/run_dispatcher_tunnel.py url --session <session>`.
+- Quick Tunnel URLs are intentionally not stored here. When a tunnel is running, retrieve the current URL with a no-`cd` command that includes the helper script path and `--repo`, such as `python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py url --repo .agents/skills/dispatcher-skill --session <session>` from a project-local repository root.
 - Runtime audit records live under ignored `data/codex_runs/` and `data/agent_conversations/`. Treat them as audit logs; do not copy raw log lines, prompts, secrets, stdout/stderr dumps, full transcripts, or full JSONL records into memory.
 
 ## Recent Portable Changes
@@ -26,7 +26,7 @@ This file keeps compact, portable working context for installed dispatcher skill
 - The web UI Directory section reports the operator workspace root, including project-local npx installs under `.agents/skills/dispatcher-skill/`, while runtime state remains under the skill's ignored `data/`.
 - UI panel defaults are viewport-aware: compact viewports start with every panel collapsed, while larger viewports open Activity, Agent status, New task, and Queue by default and keep Directory plus task cards collapsed.
 - Tmux session defaults use `<repo>-tunnel`, where `<repo>` is found by searching the directory hierarchy. For nested installs at `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/`; for `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`, not the `dispatcher-skill` directory name. This development repository's default is `dispatcher-skill-tunnel`.
-- Init/start summaries end with a command for checking the current Quick Tunnel URL; memory and durable docs still omit the generated URL itself.
+- Init/start summaries end with a no-`cd` command for checking the current Quick Tunnel URL; memory and durable docs still omit the generated URL itself.
 - Manager and dispatcher-owned worker calls explicitly set non-interactive approval policy plus `--sandbox workspace-write --cd <repo>` so task-plane agents can edit the skill repo and use SQLite-backed worker requests instead of inheriting a read-only Codex CLI default.
 
 ## Verification Summary

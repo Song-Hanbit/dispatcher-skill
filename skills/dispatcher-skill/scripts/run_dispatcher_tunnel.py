@@ -852,6 +852,10 @@ def shell_join(parts: list[str]) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts)
 
 
+def helper_command(repo: Path, command: str, *args: str) -> str:
+    return shell_join(["python3", Path(__file__).resolve(), command, "--repo", repo, *args])
+
+
 def tmux_capture(target: str) -> str:
     result = tmux_run("capture-pane", "-Jpt", target, "-S", "-200", check=False)
     require_tmux_access(result)
@@ -874,7 +878,7 @@ def wait_for_quick_url(session: str, timeout: float) -> str | None:
     return None
 
 
-def print_tmux_summary(session: str, local_url: str, quick_url: str | None) -> None:
+def print_tmux_summary(repo: Path, session: str, local_url: str, quick_url: str | None) -> None:
     print(f"tmux session: {session}", flush=True)
     print(f"Dispatcher local URL: {local_url}", flush=True)
     print("tmux windows: server, dispatcher, reboot, tunnel", flush=True)
@@ -891,7 +895,7 @@ def print_tmux_summary(session: str, local_url: str, quick_url: str | None) -> N
     print("Manager restart marker after task completion:", flush=True)
     print("REBOOT_AFTER_TASK restart-dispatcher <reason>", flush=True)
     print(f"Stop: tmux kill-session -t ={session}", flush=True)
-    print(f"Check Quick Tunnel URL: {sys.argv[0]} url --session {session}", flush=True)
+    print(f"Check Quick Tunnel URL: {helper_command(repo, 'url', '--session', session)}", flush=True)
 
 
 def ensure_reboot_window(args: argparse.Namespace, repo: Path, port: int) -> None:
@@ -931,7 +935,7 @@ def start_tmux(args: argparse.Namespace, repo: Path, cloudflared: str) -> int:
     tmux_run("new-window", "-t", tmux_session_target(args.session), "-n", "tunnel", "-c", str(repo))
     tmux_run("send-keys", "-t", tmux_window_target(args.session, "tunnel"), tunnel_cmd, "C-m")
     quick_url = wait_for_quick_url(args.session, args.url_timeout)
-    print_tmux_summary(args.session, local_url, quick_url)
+    print_tmux_summary(repo, args.session, local_url, quick_url)
     return 0
 
 
@@ -956,7 +960,7 @@ def restart_server(args: argparse.Namespace, repo: Path) -> int:
     wait_for_server(f"{local_url}/")
     ensure_reboot_window(args, repo, port)
     quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
-    print_tmux_summary(args.session, local_url, quick_url)
+    print_tmux_summary(repo, args.session, local_url, quick_url)
     return 0
 
 
@@ -977,7 +981,7 @@ def restart_dispatcher(args: argparse.Namespace, repo: Path) -> int:
     local_url = f"http://{args.host}:{args.port}"
     ensure_reboot_window(args, repo, args.port)
     quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
-    print_tmux_summary(args.session, local_url, quick_url)
+    print_tmux_summary(repo, args.session, local_url, quick_url)
     return 0
 
 
@@ -1000,7 +1004,7 @@ def restart_reboot(args: argparse.Namespace, repo: Path) -> int:
     tmux_run("send-keys", "-t", target, cmd, "C-m")
     local_url = f"http://{args.host}:{port}"
     quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
-    print_tmux_summary(args.session, local_url, quick_url)
+    print_tmux_summary(repo, args.session, local_url, quick_url)
     return 0
 
 

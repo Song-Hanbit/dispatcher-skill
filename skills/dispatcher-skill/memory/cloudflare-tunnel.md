@@ -83,7 +83,7 @@ For the current installed tree, use `.`, or pass `<repo>` explicitly.
 Inspect or stop:
 
 ```bash
-python3 scripts/run_dispatcher_tunnel.py url
+python3 <skill-root>/scripts/run_dispatcher_tunnel.py url --repo <skill-root> --session <session>
 python3 scripts/run_dispatcher_tunnel.py status
 python3 scripts/run_dispatcher_tunnel.py stop
 ```
