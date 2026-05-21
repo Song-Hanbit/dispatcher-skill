@@ -1,0 +1,1 @@
+"""Minimal dispatcher app package."""

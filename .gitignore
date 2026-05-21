@@ -1,0 +1,32 @@
+# Python and generated caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local dispatcher/runtime state
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.pid
+*.sock
+*.token
+*.log
+*.log.*
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Local Codex/agent tool state
+.codex/
+.agents/
+
+# Migration notes are local to this development container, not package payload
+skill-migration-memory/
+
+# Optional large local binary; exported packages should provide cloudflared externally
+skills/dispatcher-skill/bin/cloudflared

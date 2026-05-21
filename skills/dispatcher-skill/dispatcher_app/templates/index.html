@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{PROJECT_NAME}}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>{{PROJECT_NAME}}</h1>
+    <div class="header-actions">
+      <div class="statusline" id="statusline">Loading...</div>
+      <div class="lockline idle" id="lockline">Lock idle</div>
+      <a class="logout" href="/logout">Logout</a>
+    </div>
+  </header>
+  <main>
+    <section class="activity-panel collapsed" id="activityPanel">
+      <h2>
+        <button class="section-toggle" type="button" id="activityPanelToggle" aria-expanded="false">
+          <span>Activity</span>
+        </button>
+      </h2>
+      <div class="activity" id="activity" hidden></div>
+    </section>
+
+    <section class="agent-panel collapsed" id="agentPanel">
+      <h2>
+        <button class="section-toggle" type="button" id="agentPanelToggle" aria-expanded="false">
+          <span>Agent status</span>
+        </button>
+      </h2>
+      <div class="agents" id="agents" hidden></div>
+      <div class="directory-panel collapsed" id="directoryPanel">
+        <h2>
+          <button class="section-toggle" type="button" id="directoryPanelToggle" aria-expanded="false">
+            <span>Directory</span>
+          </button>
+        </h2>
+        <div class="directory-tree" id="directoryTree" hidden></div>
+      </div>
+    </section>
+
+    <section class="task-form-panel collapsed" id="taskFormPanel">
+      <h2>
+        <button class="section-toggle" type="button" id="taskFormPanelToggle" aria-expanded="false">
+          <span>New task</span>
+        </button>
+      </h2>
+      <form id="taskForm" hidden>
+        <label for="title">Title</label>
+        <input id="title" name="title" placeholder="Optional title" />
+
+        <label for="description">Description</label>
+        <textarea id="description" name="description" placeholder="What should the worker do?"></textarea>
+
+        <label for="acceptance">Acceptance criteria</label>
+        <textarea id="acceptance" name="acceptance_criteria" placeholder="How should completion be checked?"></textarea>
+
+        <label for="priority">Priority</label>
+        <select id="priority" name="priority">
+          <option value="1">1 - highest</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5 - lowest</option>
+        </select>
+
+        <div class="actions">
+          <button type="submit">Add task</button>
+          <button class="secondary" type="button" id="queueTaskForm">Add to Pending</button>
+          <button class="secondary" type="button" id="clearTaskForm">Clear</button>
+          <button class="secondary" type="button" id="refresh">Refresh</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="queue-panel collapsed" id="queuePanel">
+      <h2>
+        <button class="section-toggle" type="button" id="queuePanelToggle" aria-expanded="false">
+          <span>Queue</span>
+        </button>
+      </h2>
+      <div class="board" id="board" hidden></div>
+    </section>
+  </main>
+</body>
+</html>

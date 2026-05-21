@@ -1,0 +1,24 @@
+{
+  "version": 5,
+  "key_type": "codex_agent_handle",
+  "agents": [
+    {
+      "role_key": "operator",
+      "name": "Operator",
+      "key": "019e2506-b573-77d1-84c8-42be74679241",
+      "key_status": "ready"
+    },
+    {
+      "role_key": "manager.default",
+      "name": "Manager",
+      "key": "019e2aa5-67f6-72b0-a306-cff429ec535d",
+      "key_status": "ready"
+    },
+    {
+      "role_key": "worker.default",
+      "name": "Worker",
+      "key": "019e3992-c5ef-7842-9b4d-8df117ce2c2f",
+      "key_status": "dispatcher_ready"
+    }
+  ]
+}
