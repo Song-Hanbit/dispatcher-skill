@@ -66,10 +66,6 @@ STATIC_DIR = BASE_DIR / "static"
 AGENTS_PATH = BASE_DIR / "agents.json"
 GLOBAL_RUNTIME_LOCK = "global_execution"
 TREE_EXCLUDED_NAMES = {
-    ".agents",
-    ".codex",
-    ".git",
-    ".pytest_cache",
     "__pycache__",
 }
 STATIC_TYPES = {
