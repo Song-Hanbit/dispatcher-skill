@@ -103,6 +103,8 @@ def main() -> int:
     results: list[CheckResult] = []
     results.append(require_file("repo root dispatcher_app/server.py", repo / "dispatcher_app" / "server.py"))
     results.append(require_file("root SKILL.md", repo / "SKILL.md"))
+    results.append(require_file("version file", repo / "VERSION"))
+    results.append(require_file("changelog", repo / "CHANGELOG.md"))
     results.append(require_file("operator requirements", repo / "requirements.md"))
 
     with tempfile.TemporaryDirectory(prefix="dispatcher-skill-smoke-pycache-") as pycache:

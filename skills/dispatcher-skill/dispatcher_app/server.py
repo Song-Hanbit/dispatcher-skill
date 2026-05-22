@@ -33,6 +33,8 @@ AUTH_PASSWORD = os.environ.get("DISPATCHER_PASSWORD", "")
 COOKIE_NAME = "dispatcher_session"
 SESSION_TOKEN = secrets.token_urlsafe(32)
 BASE_DIR = Path(__file__).resolve().parent
+MAX_USER_TASK_MESSAGE_CHARS = 4000
+CONTINUABLE_STATUSES = {"done", "failed", "canceled"}
 
 
 def operator_cwd() -> Path:
@@ -84,6 +86,8 @@ TECHNICAL_MANAGER_STREAM_PREFIXES = (
     "turn.completed",
 )
 ACTIVITY_CONVERSATION_EVENT_TYPES = {
+    "user_continuation",
+    "user_steering",
     "manager_command",
     "manager_file_change",
     "manager_delegation",
@@ -133,6 +137,48 @@ def timestamp_to_unix(value: Any) -> float:
         return datetime.fromisoformat(str(value)).timestamp()
     except (TypeError, ValueError):
         return queue_now()
+
+
+def unique_task_ids(values: list[int] | tuple[int, ...]) -> list[int]:
+    seen: set[int] = set()
+    task_ids: list[int] = []
+    for value in values:
+        task_id = int(value)
+        if task_id <= 0 or task_id in seen:
+            continue
+        seen.add(task_id)
+        task_ids.append(task_id)
+    return task_ids
+
+
+def parse_bulk_queue_task_ids(payload: dict[str, Any]) -> list[int] | None:
+    scope = str(payload.get("scope") or "selected").strip().lower()
+    if scope == "all":
+        return None
+    raw_ids = payload.get("ids")
+    if raw_ids is None:
+        raise ValueError("ids are required unless scope is all")
+    if not isinstance(raw_ids, list):
+        raise ValueError("ids must be a list")
+    task_ids: list[int] = []
+    for raw_id in raw_ids:
+        try:
+            task_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ids must contain integers") from exc
+        if task_id <= 0:
+            raise ValueError("ids must contain positive integers")
+        task_ids.append(task_id)
+    return unique_task_ids(task_ids)
+
+
+def append_labeled_note(existing: str, label: str, note: str) -> str:
+    message = str(note or "").strip()
+    if not message:
+        return str(existing or "")
+    section = f"{label}:\n{message}"
+    current = str(existing or "")
+    return f"{current.rstrip()}\n\n{section}" if current.strip() else section
 
 
 def list_agent_states(store: "Store") -> list[dict[str, Any]]:
@@ -339,7 +385,10 @@ def latest_activity_task_id_for_agent(store: "Store", role_key: str) -> int | No
 def event_belongs_to_activity_agent(event: dict[str, Any], role_key: str) -> bool:
     event_type = str(event["type"])
     if role_key.startswith("manager."):
-        return event_type.startswith(("manager_", "worker_")) or event_type == "task_failed"
+        return (
+            event_type.startswith(("manager_", "worker_"))
+            or event_type in {"task_failed", "user_continuation", "user_steering"}
+        )
     if role_key.startswith("worker."):
         if not event_type.startswith("worker_"):
             return event_type == "task_failed"
@@ -1552,7 +1601,37 @@ class Store:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-            return dict(row) if row else None
+            if row is None:
+                return None
+            task = dict(row)
+            task["steering_messages"] = self._task_steering_messages(conn, task_id)
+            return task
+
+    def _task_steering_messages(
+        self,
+        conn: sqlite3.Connection,
+        task_id: int,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT id, message, created_at
+            FROM events
+            WHERE task_id = ?
+              AND type = 'user_steering'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (task_id, limit),
+        ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "message": str(row["message"] or ""),
+                "created_at": str(row["created_at"]),
+            }
+            for row in reversed(rows)
+        ]
 
     def claim_next_task_for_manager(
         self,
@@ -1806,10 +1885,11 @@ class Store:
             ).fetchone()
             if row is None:
                 return False
-            acceptance = str(row["acceptance_criteria"] or "")
-            if approval_note:
-                note_section = f"User approval note:\n{approval_note}"
-                acceptance = f"{acceptance.rstrip()}\n\n{note_section}" if acceptance.strip() else note_section
+            acceptance = append_labeled_note(
+                str(row["acceptance_criteria"] or ""),
+                "User approval note",
+                approval_note,
+            )
             conn.execute(
                 """
                 UPDATE tasks
@@ -1835,7 +1915,9 @@ class Store:
             row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 return False
-            conn.execute(
+            if row["status"] != "inbox":
+                return False
+            cur = conn.execute(
                 """
                 UPDATE tasks
                 SET status = 'pending',
@@ -1847,8 +1929,81 @@ class Store:
                 """,
                 (queued_at, now, task_id),
             )
+            if cur.rowcount <= 0:
+                return False
             self._insert_event(conn, task_id, "task_queued", "User moved task from Inbox to Pending.", now)
             return True
+
+    def queue_inbox_tasks(self, task_ids: list[int] | None = None) -> dict[str, Any]:
+        now = utc_now()
+        base_queued_at = queue_now()
+        requested_ids = unique_task_ids(task_ids) if task_ids is not None else None
+        with self.connect() as conn:
+            if requested_ids is None:
+                rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM tasks
+                    WHERE status = 'inbox'
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ).fetchall()
+                requested_count = len(rows)
+                inbox_ids = [int(row["id"]) for row in rows]
+                found_count = requested_count
+            elif not requested_ids:
+                requested_count = 0
+                found_count = 0
+                inbox_ids = []
+            else:
+                placeholders = ", ".join("?" for _ in requested_ids)
+                rows = conn.execute(
+                    f"""
+                    SELECT id, status
+                    FROM tasks
+                    WHERE id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    requested_ids,
+                ).fetchall()
+                requested_count = len(requested_ids)
+                found_count = len(rows)
+                inbox_ids = [
+                    int(row["id"])
+                    for row in rows
+                    if row["status"] == "inbox"
+                ]
+
+            for index, task_id in enumerate(inbox_ids):
+                queued_at = base_queued_at + (index / 1000000)
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'pending',
+                        owner = NULL,
+                        lease_expires_at = NULL,
+                        queued_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                      AND status = 'inbox'
+                    """,
+                    (queued_at, now, task_id),
+                )
+                self._insert_event(
+                    conn,
+                    task_id,
+                    "task_queued",
+                    "User bulk moved task from Inbox to Pending.",
+                    now,
+                )
+
+            return {
+                "requested": requested_count,
+                "found": found_count,
+                "queued": len(inbox_ids),
+                "skipped": max(0, requested_count - len(inbox_ids)),
+                "ids": inbox_ids,
+            }
 
     def delete_task(self, task_id: int) -> bool:
         with self.connect() as conn:
@@ -1901,6 +2056,69 @@ class Store:
                 (now, task_id),
             )
             self._insert_event(conn, task_id, "task_canceled", "User canceled the task.", now)
+            return True
+
+    def add_task_steering(self, task_id: int, message: str) -> bool:
+        message = str(message or "").strip()
+        if not message:
+            raise ValueError("Steering message is required.")
+        if len(message) > MAX_USER_TASK_MESSAGE_CHARS:
+            raise ValueError(f"Steering message must be {MAX_USER_TASK_MESSAGE_CHARS} characters or fewer.")
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                return False
+            if row["status"] != "in_progress":
+                raise RuntimeError("Steering messages require an in-progress task.")
+            self._insert_event(conn, task_id, "user_steering", message, now)
+            conn.execute(
+                "UPDATE tasks SET updated_at = ? WHERE id = ?",
+                (now, task_id),
+            )
+            return True
+
+    def continue_task(self, task_id: int, message: str) -> bool:
+        message = str(message or "").strip()
+        if not message:
+            raise ValueError("Continuation message is required.")
+        if len(message) > MAX_USER_TASK_MESSAGE_CHARS:
+            raise ValueError(f"Continuation message must be {MAX_USER_TASK_MESSAGE_CHARS} characters or fewer.")
+        now = utc_now()
+        queued_at = queue_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, acceptance_criteria FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] not in CONTINUABLE_STATUSES:
+                raise RuntimeError("Continuation requires a done or closed task.")
+            acceptance = append_labeled_note(
+                str(row["acceptance_criteria"] or ""),
+                "User continuation note",
+                message,
+            )
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'pending',
+                    owner = NULL,
+                    lease_expires_at = NULL,
+                    error = '',
+                    approved = 0,
+                    acceptance_criteria = ?,
+                    queued_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (acceptance, queued_at, now, task_id),
+            )
+            self._insert_event(conn, task_id, "user_continuation", message, now)
+            self._insert_event(conn, task_id, "task_continued", "User continued this task to Pending.", now)
             return True
 
     def add_event(self, task_id: int | None, event_type: str, message: str) -> None:
@@ -2060,6 +2278,16 @@ class Handler(BaseHTTPRequestHandler):
             task_id = self.server.store.create_task(payload)
             self.send_json({"id": task_id}, status=201)
             return
+        if path == "/api/tasks/bulk-queue":
+            payload = self.read_json()
+            try:
+                task_ids = parse_bulk_queue_task_ids(payload)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            result = self.server.store.queue_inbox_tasks(task_ids)
+            self.send_json({"ok": True, **result})
+            return
 
         match = re.fullmatch(r"/api/tasks/(\d+)/(approve|retry|cancel|queue|delete)", path)
         if match:
@@ -2076,6 +2304,46 @@ class Handler(BaseHTTPRequestHandler):
                     "queue": self.server.store.queue_task,
                     "delete": self.server.store.delete_task,
                 }[action](task_id)
+            if not ok:
+                self.send_error(404, "Task not found")
+                return
+            self.send_json({"ok": True})
+            return
+
+        steer_match = re.fullmatch(r"/api/tasks/(\d+)/steer", path)
+        if steer_match:
+            payload = self.read_json()
+            try:
+                ok = self.server.store.add_task_steering(
+                    int(steer_match.group(1)),
+                    str(payload.get("message") or ""),
+                )
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self.send_json({"error": str(exc)}, status=409)
+                return
+            if not ok:
+                self.send_error(404, "Task not found")
+                return
+            self.send_json({"ok": True})
+            return
+
+        continue_match = re.fullmatch(r"/api/tasks/(\d+)/continue", path)
+        if continue_match:
+            payload = self.read_json()
+            try:
+                ok = self.server.store.continue_task(
+                    int(continue_match.group(1)),
+                    str(payload.get("message") or ""),
+                )
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self.send_json({"error": str(exc)}, status=409)
+                return
             if not ok:
                 self.send_error(404, "Task not found")
                 return

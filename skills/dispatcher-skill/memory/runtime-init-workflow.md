@@ -22,6 +22,8 @@ It checks source imports, CLI help surfaces, `requirements.md`, tunnel `init-sta
 
 Before initialization, the operator should read `requirements.md`. It lists host prerequisites and the supported `cloudflared` choices.
 
+Initialization has a mandatory memory bootstrap. The helper reads `memory/memory.md`, `memory/operator-onboarding.md`, `memory/runtime-init-workflow.md`, and `memory/context-compression/operator.md` before writing local state. If any required file is missing, init fails instead of guessing. The helper also runs the initialization compact checkpoint over `memory/` so durable memory rejects raw runtime logs, full JSON records, full transcripts, prompts, secrets, private keys, and live tunnel URLs.
+
 For deployment preparation, preview local-state cleanup before packaging:
 
 ```bash
@@ -38,6 +40,8 @@ python3 scripts/run_dispatcher_tunnel.py init-status --repo .
 
 `init-status` reports whether required dispatcher files and ignored local settings exist. It may report `password_set`, but it must not print the password.
 
+`init-status` also reports `operator_memory_ready` and `memory_compact_ready` with file-level metadata only. It must not print memory contents, secrets, local env values, runtime logs, or tunnel URLs.
+
 When `cloudflared` is missing or unconfigured, `init-status` also prints copy-ready commands for a server-local `~/.local/bin/cloudflared` install and a matching `init --cloudflared ~/.local/bin/cloudflared` command.
 
 2. Initialize local state when needed:
@@ -46,7 +50,7 @@ When `cloudflared` is missing or unconfigured, `init-status` also prints copy-re
 python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path> --port <port>
 ```
 
-`init` verifies the repo root, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, records the operator Codex handle from `--operator-key`, `DISPATCHER_OPERATOR_KEY`, or `CODEX_THREAD_ID` when available, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`.
+`init` verifies the repo root, loads the required operator initialization memory, runs the memory compact checkpoint, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, records the operator Codex handle from `--operator-key`, `DISPATCHER_OPERATOR_KEY`, or `CODEX_THREAD_ID` when available, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`.
 
 After `init` creates the default `dispatcher_app/agents.json`, complete any known missing local agent fields before relying on the runtime. Keep the file limited to `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`; leave unknown Codex handles as `null` with `key_status: "missing"` so the dispatcher can populate them on first use. Manager keys are recorded after manager Codex startup, and dispatcher-owned worker keys are recorded as soon as the worker Codex session emits `thread.started`. Do not add secrets, provider tokens, passwords, tunnel URLs, policy text, or lifecycle notes to `agents.json`.
 

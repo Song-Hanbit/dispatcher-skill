@@ -5,6 +5,8 @@ Use this checklist before handing off a packaged `dispatcher-skill` artifact. Th
 ## Package Boundary
 
 - [ ] Include root `SKILL.md`, `requirements.md`, selected final docs distilled from `memory/`, `dispatcher_app/`, `scripts/`, and optional `bin/cloudflared` according to the selected packaging profile. Include a skill-local `AGENTS.md` only if one is intentionally added to the payload.
+- [ ] Exclude development decision logs such as `memory/decisions.md`; distill any durable facts into focused portable docs before export.
+- [ ] Confirm `VERSION` and `CHANGELOG.md` are present, non-secret, and updated together for the release.
 - [ ] Include `dispatcher_app/` as source/runtime code only; runtime state must be created locally after install/init.
 - [ ] Treat `scripts/run_dispatcher_tunnel.py` and `scripts/context_compact.py` as integrated helper capabilities, not replacement roots.
 - [ ] Exclude `data/`, `dispatcher_app/agents.json`, SQLite DBs, audit logs, reboot state, local lock/token/PID/socket state, local env files, and local tunnel URLs.
@@ -29,7 +31,7 @@ Use this checklist before handing off a packaged `dispatcher-skill` artifact. Th
 python3 scripts/smoke_skill_package.py --repo <candidate>
 ```
 
-- [ ] Confirm the smoke test covers `dispatcher_app` import, dispatcher CLI `--help` surfaces, `requirements.md`, tunnel helper `init-status`, guarded reset dry-run, context compact helper `--help`, and root skill validation when `quick_validate.py` is available.
+- [ ] Confirm the smoke test covers `dispatcher_app` import, dispatcher CLI `--help` surfaces, `SKILL.md`, `VERSION`, `CHANGELOG.md`, `requirements.md`, tunnel helper `init-status`, guarded reset dry-run, context compact helper `--help`, and root skill validation when `quick_validate.py` is available.
 - [ ] If debugging manually, use help or status-only checks such as `python3 -m dispatcher_app.server --help`, `python3 -m dispatcher_app.dispatcher --help`, and `python3 scripts/run_dispatcher_tunnel.py init-status --repo <candidate>`.
 - [ ] Do not start server, dispatcher, reboot watcher, tmux, cloudflared, tunnel `start`/`foreground`/`restart`, or network work during non-runtime smoke checks.
 

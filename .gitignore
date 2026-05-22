@@ -35,3 +35,6 @@ skills/dispatcher-skill/bin/cloudflared
 
 # Skill repo tests
 tests/
+
+# Todo-list for this repo
+todo.md

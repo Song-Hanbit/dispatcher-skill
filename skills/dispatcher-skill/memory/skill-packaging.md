@@ -28,7 +28,8 @@ The helper scripts are part of the root dispatcher skill, not independent nested
 
 Package current source and final documentation needed to operate the dispatcher app and helper features:
 
-- Root `SKILL.md` and selected final docs distilled from portable project memory. Include a skill-local `AGENTS.md` only if one is intentionally added to the payload; operator-container instructions and migration memory are not package payload.
+- Root `SKILL.md` and selected final docs distilled from portable project memory. Include a skill-local `AGENTS.md` only if one is intentionally added to the payload; operator-container instructions, migration memory, and development decision logs such as `memory/decisions.md` are not package payload.
+- `VERSION` and `CHANGELOG.md` as non-secret package metadata for current version, release history, and bump policy.
 - `requirements.md` so operators can verify Python, Codex, tmux, network, and cloudflared expectations before initialization.
 - `dispatcher_app/` source code, templates, static assets, schemas, and the non-secret registry generation helper.
 - Helper scripts under `scripts/run_dispatcher_tunnel.py` and `scripts/context_compact.py`.
@@ -68,7 +69,7 @@ Use this non-runtime smoke test against a packaged or copied candidate tree befo
 python3 scripts/smoke_skill_package.py --repo .
 ```
 
-The smoke test checks that `dispatcher_app` imports from the candidate root, dispatcher app modules expose `--help` without crashing, `requirements.md` exists, `scripts/run_dispatcher_tunnel.py init-status --repo <candidate>` works without starting tmux or Cloudflare, the guarded `reset` dry run works, `scripts/context_compact.py --help` works, and root `SKILL.md` validates with the system `quick_validate.py` when it is available.
+The smoke test checks that `dispatcher_app` imports from the candidate root, dispatcher app modules expose `--help` without crashing, `SKILL.md`, `VERSION`, `CHANGELOG.md`, and `requirements.md` exist, `scripts/run_dispatcher_tunnel.py init-status --repo <candidate>` works without starting tmux or Cloudflare, the guarded `reset` dry run works, `scripts/context_compact.py --help` works, and root `SKILL.md` validates with the system `quick_validate.py` when it is available.
 
 This is source/help/init-status validation only. It must not start the server, dispatcher loop, reboot watcher, tmux, cloudflared, tunnel foreground/start/restart paths, or network work.
 
@@ -93,6 +94,8 @@ Do not package local runtime or machine-specific state:
 - Host-specific process state such as tmux session state, PID files, sockets, and lock tokens.
 
 Runtime log summaries or handoffs may be included only when they contain compressed durable facts and no raw audit content.
+
+Development decision logs are excluded from exported packages. Before export, distill any still-relevant architectural decisions into focused portable docs such as `memory/architecture.md`, `memory/dispatcher-app.md`, or `memory/skill-packaging.md`, then leave the raw decision log out of the payload.
 
 ## Deferred Follow-ups
 

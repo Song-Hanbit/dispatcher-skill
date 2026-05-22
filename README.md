@@ -1,223 +1,314 @@
 # Dispatcher Skill
 
-Dispatcher Skill is a Codex skill for running a local dispatcher queue: users submit work in a small web UI, and dispatcher-managed manager and worker agents process the queue.
+This repository packages a Codex skill that turns a repository into a small local dispatcher queue. A user adds work through a browser UI, then the dispatcher runs manager and worker Codex sessions to process those tasks while preserving queue state, approvals, activity history, and restart safety.
 
-Most users should not initialize the runtime by hand. Install the skill with an npx-based Agent Skills installer or your Codex CLI skill installation flow, then ask your Codex operator to initialize and start it.
+The shippable skill is under `skills/dispatcher-skill/`. The repository root is the development/operator container for that skill.
 
-## Install With npx
+## What It Solves
 
-Install into the repository where you want Codex to use the dispatcher skill. Use the skill payload directory, not the repository root:
+Codex is useful for interactive work, but repeated repository tasks need more structure than a single chat turn. Dispatcher Skill adds that structure:
+
+- A browser queue for creating, reviewing, approving, retrying, and canceling tasks.
+- A deterministic Python dispatcher that owns task state in SQLite.
+- A manager role that interprets queued tasks and can ask bounded worker roles for help.
+- Activity views that show task requests, manager actions, worker activity, and results in one place.
+- Runtime safety around approvals, local state, memory cleanup, and dispatcher restarts.
+
+The goal is not to replace Codex. It is to give Codex a local task lane so users can submit work, leave it running, and come back to inspect what happened.
+
+## Quick Start
+
+1. Install the skill into the repository where you want the dispatcher.
 
 ```bash
 npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -a codex -y
 ```
 
-For a local checkout:
+For a local checkout of this repository:
 
 ```bash
 npx skills add ./skills/dispatcher-skill -a codex -y
 ```
 
-Notes:
+2. Restart Codex so it discovers the new skill.
 
-- `-a codex` targets Codex.
-- Project-local installation is the default here so each repository can carry its own dispatcher skill configuration.
-- The installed skill copy is expected under `.agents/skills/dispatcher-skill/` in that repository.
-- `-y` skips interactive confirmation. Omit it if you want to review prompts.
-- After installing, restart Codex so the new skill is discovered.
-
-## User Flow
-
-1. Install this repository's skill payload with `npx skills add` or your Codex CLI skill installation flow.
-   - The source payload in this repository is `skills/dispatcher-skill/`.
-   - A project-local npx install normally copies it to `.agents/skills/dispatcher-skill/` inside the target repository.
-   - If your installer accepts a Git repository and skill path, point it at this repository and `skills/dispatcher-skill/`.
-2. Open Codex in the environment where the skill is installed.
-3. Ask the operator to initialize it, for example:
+3. Ask Codex to initialize and start it:
 
 ```text
 Initialize the dispatcher skill and start the local dispatcher runtime.
 ```
 
-4. The operator checks host requirements, configures local runtime state, and starts the dispatcher.
-5. Use the dispatcher web UI to create and review queued tasks.
+4. Open the dispatcher web UI URL that the operator reports.
 
-## What The Operator Handles
+5. Add work items to the queue. New tasks enter `Inbox`; queue them into `Pending` when they are ready for the dispatcher.
 
-For a project-local npx install, the operator should stay in the repository root and pass the installed skill root explicitly:
+Most users should use the Codex operator flow above instead of running helper commands by hand.
+
+## Manual Operator Flow
+
+If you are operating the skill directly, stay in the target repository root and pass the installed skill root with `--repo`.
+
+For a project-local install:
 
 ```bash
 python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
-```
-
-This keeps the dispatcher UI's Directory panel and header title pointed at the repository, while runtime state stays under `.agents/skills/dispatcher-skill/data/`. When maintaining this source repository directly, use `cd skills/dispatcher-skill` instead.
-
-Before starting runtime services, the operator reviews:
-
-- `SKILL.md`: skill entrypoint and operating boundaries.
-- `requirements.md`: host requirements and `cloudflared` setup.
-- `memory/`: durable operator, runtime, packaging, and safety procedures.
-
-The operator chooses how `cloudflared` is provided. The recommended server-local path is outside the skill checkout:
-
-```bash
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
 python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init --repo .agents/skills/dispatcher-skill --cloudflared ~/.local/bin/cloudflared --port 8000
 ```
 
-`init-status` prints copy-ready commands for this setup. The operator may also use a host-managed `cloudflared` on `PATH`, an explicit binary path, or the ignored `data/bin/cloudflared` fallback for local throwaway installs.
+For this source repository:
 
-## What Is Included
+```bash
+cd skills/dispatcher-skill
+python3 scripts/run_dispatcher_tunnel.py init-status --repo .
+python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bin/cloudflared --port 8000
+```
 
-- `skills/dispatcher-skill/SKILL.md`: Codex skill entrypoint.
-- `skills/dispatcher-skill/dispatcher_app/`: Python dispatcher server, queue runtime, manager/worker runners, templates, static assets, schemas, runtime lock helper, and reboot watcher.
-- `skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py`: init, status, start, stop, reset, and Cloudflare Quick Tunnel helper.
-- `skills/dispatcher-skill/scripts/context_compact.py`: context handoff and guarded purge helper.
-- `skills/dispatcher-skill/requirements.md`: operator-facing runtime prerequisites.
-- `skills/dispatcher-skill/memory/`: portable skill operating memory.
-- `skill-migration-memory/`: ignored development-container notes, not package payload.
+`init-status` checks local setup without starting tmux, Cloudflare, the server, the dispatcher, or the reboot watcher. `init` creates ignored local runtime state, records available local agent handles, and starts the runtime unless `--no-start` is supplied.
 
-After project-local npx installation, the same skill files live under `.agents/skills/dispatcher-skill/` in the target repository.
+The init helper also enforces memory bootstrap checks: required operator memory files are loaded, and durable memory is checked so raw logs, secrets, full transcripts, private keys, and live tunnel URLs do not get mixed into portable memory.
+
+## Requirements
+
+Review `skills/dispatcher-skill/requirements.md` before first runtime initialization. In short, the runtime expects:
+
+- Python 3 with the standard library.
+- Codex CLI installed and authenticated.
+- `tmux` for the normal multi-window runtime.
+- `cloudflared` for browser access through a Quick Tunnel, unless you use another local access path.
+- A dispatcher password supplied through prompt, environment, or `--password-file`.
+
+Recommended `cloudflared` setup keeps the binary outside the skill checkout:
+
+```bash
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
+```
+
+## How It Works
+
+The runtime has two planes:
+
+- The user/operator plane initializes, inspects, and maintains the dispatcher runtime.
+- The task plane claims queued work and runs manager and worker Codex sessions.
+
+The flow is:
+
+1. The web UI writes tasks into SQLite.
+2. The dispatcher loop claims the oldest `Pending` task when the task plane is free.
+3. The manager Codex session receives one task payload and returns `execute`, `needs_approval`, or `failed`.
+4. If useful, the manager queues a dispatcher-owned worker request; the Python dispatcher runs the worker and streams worker activity back into the same Activity view.
+5. The dispatcher records the result, handles approval pauses, and safely queues any post-task runtime restart marker.
+
+Managers do not start tmux, Cloudflare, or reboot commands directly. Runtime restart requests are returned as a final result marker and processed by the host-side reboot watcher only after the task is done.
+
+## Using The UI
+
+- `Inbox`: newly created task candidates. Review or edit these before queueing.
+- `Pending`: tasks ready for dispatcher processing.
+- `In Progress`: the currently claimed task.
+- `Needs Approval`: tasks paused by the manager because user approval is required.
+- `Done`: completed tasks.
+- `Closed`: failed or canceled tasks.
+
+The Activity panel shows the task request, manager messages, command/file-change activity, worker reports, and final result. The Agent panel shows manager/worker/operator status and the local repository directory view.
 
 ## Package And State Boundary
 
-Package source and portable docs, not local runtime state.
+Package source and portable documentation. Do not package local runtime state.
 
-Include the skill payload source, scripts, memory docs, and selected non-secret metadata. Exclude `data/`, `skill-migration-memory/`, SQLite databases, logs, lock/token/PID/socket files, local env files, local or public tunnel URLs, prompts, full transcripts, stdout/stderr dumps, generated caches, and unvetted large binaries.
+Included in the skill payload:
 
-`cloudflared` should usually live outside the exported skill package. Include `skills/dispatcher-skill/bin/cloudflared` only when a packaging profile intentionally ships a vetted binary.
+- `skills/dispatcher-skill/SKILL.md`
+- `skills/dispatcher-skill/VERSION`
+- `skills/dispatcher-skill/CHANGELOG.md`
+- `skills/dispatcher-skill/dispatcher_app/`
+- `skills/dispatcher-skill/scripts/`
+- `skills/dispatcher-skill/requirements.md`
+- selected portable docs under `skills/dispatcher-skill/memory/`
+
+Ignored local state:
+
+- `skills/dispatcher-skill/data/`
+- `skills/dispatcher-skill/dispatcher_app/agents.json`
+- SQLite databases and runtime logs
+- lock, token, PID, socket, and local env files
+- local or public tunnel URLs
+- raw prompts, stdout/stderr dumps, full transcripts, and full JSONL records
+
+`skill-migration-memory/` is for this development container only. It is not package payload.
+Development decision logs such as `memory/decisions.md` are not package payload; distill any durable, portable facts into the focused memory docs before export.
 
 ## Maintainer Checks
 
-From the repository root after a project-local npx install:
+From the skill root:
 
 ```bash
-python3 .agents/skills/dispatcher-skill/scripts/smoke_skill_package.py --repo .agents/skills/dispatcher-skill
-python3 -m py_compile .agents/skills/dispatcher-skill/dispatcher_app/*.py
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py reset --repo .agents/skills/dispatcher-skill
+python3 scripts/smoke_skill_package.py --repo .
+python3 -m py_compile dispatcher_app/*.py
+python3 scripts/run_dispatcher_tunnel.py init-status --repo .
+python3 scripts/run_dispatcher_tunnel.py reset --repo .
 ```
 
-For this source repository, run the same checks from `skills/dispatcher-skill/`.
+These checks do not start runtime services. `reset` is a dry run unless `--confirm-reset` is supplied.
 
-These checks do not start tmux, Cloudflare, the server, the dispatcher loop, or the reboot watcher. `reset` is a dry run unless `--confirm-reset` is supplied.
+## Versioning
 
-## Safety
-
-- Do not commit secrets, passwords, local tunnel URLs, runtime databases, raw logs, prompts, full transcripts, or local env files.
-- Keep installed runtime state under the skill's ignored `data/` directory.
-- Keep development-container notes in `skill-migration-memory/`, not in portable skill memory.
-- Runtime start, restart, tunnel, and reboot watcher actions are operator/host-side work.
+The current version is recorded in `skills/dispatcher-skill/VERSION`. Release history and bump rules are in `skills/dispatcher-skill/CHANGELOG.md`.
 
 ---
 
 # Dispatcher Skill 한국어
 
-Dispatcher Skill은 로컬 dispatcher queue를 실행하는 Codex skill입니다. 사용자는 작은 웹 UI에 작업을 넣고, dispatcher가 관리하는 manager와 worker 에이전트가 queue를 처리합니다.
+이 repository는 Codex용 Dispatcher Skill을 패키징합니다. 사용자는 브라우저 UI에 작업을 넣고, dispatcher는 manager/worker Codex 세션을 실행해 queue를 처리합니다. Task 상태, 승인, activity, runtime restart 안전성은 Python dispatcher가 관리합니다.
 
-대부분의 사용자는 runtime을 직접 초기화하지 않아도 됩니다. npx 기반 Agent Skills installer 또는 Codex CLI의 skill 설치 흐름으로 이 skill을 설치한 뒤, Codex operator에게 초기화와 시작을 요청하면 됩니다.
+배포되는 skill payload는 `skills/dispatcher-skill/` 아래에 있습니다. Repository root는 이 skill을 개발하고 운영하기 위한 container입니다.
 
-## npx로 설치
+## 해결하는 문제
 
-Codex가 dispatcher skill을 사용할 repository 안에 직접 설치하는 것을 기본으로 합니다. Repository root가 아니라 skill payload 디렉토리를 지정합니다.
+Codex 대화 한 번으로 끝나지 않는 repository 작업에는 queue, 상태, 승인, 재시도, 이력 관리가 필요합니다. Dispatcher Skill은 그 흐름을 로컬에서 제공합니다.
+
+- 작업을 만들고 검토하고 승인할 수 있는 브라우저 queue.
+- SQLite를 source of truth로 쓰는 deterministic Python dispatcher.
+- Queue task를 해석하는 manager 역할.
+- Manager가 필요할 때 부를 수 있는 dispatcher-owned worker 역할.
+- Task 요청, command/file 변경, worker 보고, 최종 결과를 함께 보여주는 Activity.
+- Secret, raw log, memory, runtime restart에 대한 운영 안전장치.
+
+목표는 Codex를 대체하는 것이 아니라, Codex가 반복 작업을 안전하게 처리할 수 있는 로컬 task lane을 제공하는 것입니다.
+
+## 빠른 시작
+
+1. Dispatcher를 사용할 repository에 skill을 설치합니다.
 
 ```bash
 npx skills add https://github.com/Song-Hanbit/dispatcher-skill/tree/main/skills/dispatcher-skill -a codex -y
 ```
 
-로컬 checkout에서 설치하려면:
+로컬 checkout에서는 다음을 사용할 수 있습니다.
 
 ```bash
 npx skills add ./skills/dispatcher-skill -a codex -y
 ```
 
-메모:
+2. Codex를 재시작해 새 skill을 로드합니다.
 
-- `-a codex`는 Codex를 대상으로 설치한다는 뜻입니다.
-- 여기서는 repository-local 설치를 기본으로 하므로 각 repository가 자신의 dispatcher skill 설정을 가질 수 있습니다.
-- 설치된 skill copy는 보통 해당 repository의 `.agents/skills/dispatcher-skill/` 아래에 생깁니다.
-- `-y`는 확인 prompt를 건너뜁니다. 직접 확인하고 싶다면 빼면 됩니다.
-- 설치 후에는 Codex를 다시 시작해야 새 skill이 발견됩니다.
-
-## 사용자 흐름
-
-1. `npx skills add` 또는 Codex CLI의 skill 설치 흐름으로 이 repository의 skill payload를 설치합니다.
-   - 이 source repository 안의 payload는 `skills/dispatcher-skill/`입니다.
-   - Project-local npx 설치 후에는 target repository 안의 `.agents/skills/dispatcher-skill/`에 복사됩니다.
-   - 설치 도구가 Git repository와 skill path를 받는다면 이 repository와 `skills/dispatcher-skill/`을 지정합니다.
-2. Skill이 설치된 환경에서 Codex를 엽니다.
-3. Operator에게 초기화를 요청합니다. 예:
+3. Codex operator에게 초기화와 시작을 요청합니다.
 
 ```text
 dispatcher skill을 초기화하고 로컬 dispatcher runtime을 시작해줘.
 ```
 
-4. Operator가 host 요구사항을 확인하고, 로컬 runtime state를 설정한 뒤 dispatcher를 시작합니다.
-5. Dispatcher 웹 UI에서 작업을 만들고 처리 상태를 확인합니다.
+4. Operator가 알려주는 dispatcher web UI URL을 엽니다.
 
-## Operator가 처리하는 일
+5. 작업을 추가합니다. 새 작업은 `Inbox`에 들어가며, 실행 준비가 되면 `Pending`으로 보냅니다.
 
-Project-local npx 설치에서는 operator가 repository root에 머무르고, 설치된 skill root를 명시적으로 넘기는 것이 기본입니다.
+대부분의 사용자는 helper command를 직접 실행하지 말고 Codex operator에게 요청하는 방식이 좋습니다.
+
+## 수동 Operator 절차
+
+직접 운영한다면 target repository root에 머물고 설치된 skill root를 `--repo`로 넘깁니다.
+
+Project-local 설치:
 
 ```bash
 python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
-```
-
-이렇게 해야 dispatcher UI의 Directory panel과 header title이 repository를 가리키고, runtime state는 `.agents/skills/dispatcher-skill/data/` 아래에 남습니다. 이 source repository 자체를 유지보수할 때는 대신 `cd skills/dispatcher-skill`을 사용합니다.
-
-Runtime service를 시작하기 전에 operator는 다음 문서를 확인합니다.
-
-- `SKILL.md`: skill entrypoint와 작업 경계.
-- `requirements.md`: host 요구사항과 `cloudflared` 설정.
-- `memory/`: operator, runtime, packaging, safety 절차.
-
-Operator는 `cloudflared`를 어디에서 제공할지 선택합니다. 서버 로컬 설치에는 skill checkout 밖의 `~/.local/bin` 경로를 권장합니다.
-
-```bash
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
 python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init --repo .agents/skills/dispatcher-skill --cloudflared ~/.local/bin/cloudflared --port 8000
 ```
 
-`init-status`는 이 설정에 맞는 복사 가능한 명령을 출력합니다. Host가 관리하는 `PATH` 상의 `cloudflared`, 명시적인 binary path, 또는 임시 로컬 설치용으로 무시되는 `data/bin/cloudflared`도 사용할 수 있습니다.
+이 source repository:
 
-## 포함된 것
+```bash
+cd skills/dispatcher-skill
+python3 scripts/run_dispatcher_tunnel.py init-status --repo .
+python3 scripts/run_dispatcher_tunnel.py init --repo . --cloudflared ~/.local/bin/cloudflared --port 8000
+```
 
-- `skills/dispatcher-skill/SKILL.md`: Codex skill entrypoint.
-- `skills/dispatcher-skill/dispatcher_app/`: Python dispatcher server, queue runtime, manager/worker runner, template, static asset, schema, runtime lock helper, reboot watcher.
-- `skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py`: init, status, start, stop, reset, Cloudflare Quick Tunnel helper.
-- `skills/dispatcher-skill/scripts/context_compact.py`: context handoff와 승인된 purge helper.
-- `skills/dispatcher-skill/requirements.md`: operator가 확인할 runtime 요구사항.
-- `skills/dispatcher-skill/memory/`: 설치된 skill에도 유효해야 하는 portable 운영 memory.
-- `skill-migration-memory/`: package payload가 아닌, 무시되는 개발 컨테이너 노트.
+`init-status`는 tmux, Cloudflare, server, dispatcher, reboot watcher를 시작하지 않고 현재 local setup을 점검합니다. `init`은 ignored local runtime state를 만들고, 가능한 agent handle을 기록하고, `--no-start`가 없으면 runtime을 시작합니다.
 
-Project-local npx 설치 후에는 같은 skill 파일들이 target repository의 `.agents/skills/dispatcher-skill/` 아래에 있습니다.
+Init helper는 memory bootstrap도 강제합니다. 필요한 operator memory 파일을 읽고, durable memory에 raw log, secret, full transcript, private key, live tunnel URL이 섞이지 않았는지 확인합니다.
+
+## 요구사항
+
+처음 초기화하기 전에 `skills/dispatcher-skill/requirements.md`를 확인하세요. 핵심 요구사항은 다음과 같습니다.
+
+- Python 3.
+- 인증된 Codex CLI.
+- 일반 runtime을 위한 `tmux`.
+- Quick Tunnel 접근을 위한 `cloudflared` 또는 다른 로컬 접근 방식.
+- prompt, environment, 또는 `--password-file`로 제공하는 dispatcher password.
+
+권장 `cloudflared` 설치 위치는 skill checkout 밖입니다.
+
+```bash
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py install-cloudflared --repo .agents/skills/dispatcher-skill --cloudflared-install-dir ~/.local/bin
+```
+
+## 작동 원리
+
+Runtime은 두 plane으로 나뉩니다.
+
+- User/operator plane은 dispatcher를 초기화하고 점검하고 유지보수합니다.
+- Task plane은 queued work를 claim하고 manager/worker Codex 세션을 실행합니다.
+
+흐름은 다음과 같습니다.
+
+1. Web UI가 SQLite에 task를 저장합니다.
+2. Dispatcher loop가 task plane이 비어 있을 때 가장 오래된 `Pending` task를 claim합니다.
+3. Manager Codex 세션이 task payload 하나를 받고 `execute`, `needs_approval`, `failed` 중 하나를 반환합니다.
+4. 필요하면 manager가 dispatcher-owned worker request를 queue에 넣고, Python dispatcher가 worker를 실행해 Activity에 표시합니다.
+5. Dispatcher가 결과를 기록하고, 승인 대기와 post-task runtime restart marker를 안전하게 처리합니다.
+
+Manager는 tmux, Cloudflare, reboot command를 직접 실행하지 않습니다. Runtime restart가 필요하면 final result marker로 요청하고, task 완료 후 host-side reboot watcher가 처리합니다.
+
+## UI 사용법
+
+- `Inbox`: 새 task 후보입니다. 검토 후 실행 준비가 되면 queue합니다.
+- `Pending`: dispatcher가 처리할 준비가 된 task입니다.
+- `In Progress`: 현재 실행 중인 task입니다.
+- `Needs Approval`: manager가 사용자 승인을 요청해 멈춘 task입니다.
+- `Done`: 완료된 task입니다.
+- `Closed`: 실패 또는 취소된 task입니다.
+
+Activity panel은 task 요청, manager 메시지, command/file-change activity, worker 보고, 최종 결과를 함께 보여줍니다. Agent panel은 manager/worker/operator 상태와 local repository directory view를 보여줍니다.
 
 ## Package와 State 경계
 
-Package에는 source와 portable docs만 넣고, local runtime state는 넣지 않습니다.
+Package에는 source와 portable docs만 넣고 local runtime state는 넣지 않습니다.
 
-Skill payload source, scripts, memory docs, secret이 아닌 선택된 metadata는 포함합니다. `data/`, `skill-migration-memory/`, SQLite database, log, lock/token/PID/socket file, local env file, local/public tunnel URL, prompt, full transcript, stdout/stderr dump, generated cache, 검증되지 않은 큰 binary는 제외합니다.
+Skill payload에 포함되는 것:
 
-`cloudflared`는 보통 export된 skill package 밖에 두는 것이 좋습니다. `skills/dispatcher-skill/bin/cloudflared`는 vetted binary를 의도적으로 포함하는 packaging profile에서만 포함합니다.
+- `skills/dispatcher-skill/SKILL.md`
+- `skills/dispatcher-skill/VERSION`
+- `skills/dispatcher-skill/CHANGELOG.md`
+- `skills/dispatcher-skill/dispatcher_app/`
+- `skills/dispatcher-skill/scripts/`
+- `skills/dispatcher-skill/requirements.md`
+- `skills/dispatcher-skill/memory/` 아래의 선별된 portable 문서
+
+무시되는 local state:
+
+- `skills/dispatcher-skill/data/`
+- `skills/dispatcher-skill/dispatcher_app/agents.json`
+- SQLite database와 runtime log
+- lock, token, PID, socket, local env file
+- local/public tunnel URL
+- raw prompt, stdout/stderr dump, full transcript, full JSONL record
+
+`skill-migration-memory/`는 이 development container 전용이며 package payload가 아닙니다.
+`memory/decisions.md` 같은 development decision log는 package payload가 아닙니다. 배포 전에 필요한 durable/portable 사실만 목적별 memory 문서로 증류합니다.
 
 ## Maintainer 확인
 
-Project-local npx 설치 후에는 repository root에서 실행합니다.
+Skill root에서 실행합니다.
 
 ```bash
-python3 .agents/skills/dispatcher-skill/scripts/smoke_skill_package.py --repo .agents/skills/dispatcher-skill
-python3 -m py_compile .agents/skills/dispatcher-skill/dispatcher_app/*.py
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
-python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py reset --repo .agents/skills/dispatcher-skill
+python3 scripts/smoke_skill_package.py --repo .
+python3 -m py_compile dispatcher_app/*.py
+python3 scripts/run_dispatcher_tunnel.py init-status --repo .
+python3 scripts/run_dispatcher_tunnel.py reset --repo .
 ```
 
-이 source repository에서는 같은 확인을 `skills/dispatcher-skill/`에서 실행합니다.
+이 확인은 runtime service를 시작하지 않습니다. `reset`은 `--confirm-reset`이 없으면 dry run입니다.
 
-이 확인 작업은 tmux, Cloudflare, server, dispatcher loop, reboot watcher를 시작하지 않습니다. `reset`은 `--confirm-reset`을 붙이지 않으면 dry run입니다.
+## Versioning
 
-## Safety
-
-- Secret, password, local tunnel URL, runtime database, raw log, prompt, full transcript, local env file을 commit하지 않습니다.
-- 설치별 runtime state는 skill의 ignored `data/` directory 아래에 둡니다.
-- 개발 컨테이너 노트는 portable skill memory가 아니라 `skill-migration-memory/`에 둡니다.
-- Runtime start, restart, tunnel, reboot watcher 작업은 operator/host-side 작업입니다.
+현재 version은 `skills/dispatcher-skill/VERSION`에 있습니다. Release history와 bump rule은 `skills/dispatcher-skill/CHANGELOG.md`에 있습니다.

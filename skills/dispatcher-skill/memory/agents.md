@@ -33,6 +33,8 @@ Manager work history is stored as ignored runtime state, not copied into durable
 - `data/codex_runs/task-*.json`: final structured manager decision/result files written by `codex_runner.py`.
 - `data/agent_conversations/manager.default.jsonl`: append-only manager prompt, Codex stream event, and final response transcript.
 
+Before a manager prompt is built, the dispatcher reads the manager initialization memory set: `memory/memory.md`, `memory/agents.md`, `memory/dispatcher-app.md`, and `memory/context-compression/<manager-role>.md`. The prompt carries a loaded-file checklist and a finalization rule requiring compact-equivalent cleanup: update durable memory only for behavior or operating-procedure changes, and never copy raw logs, full transcripts, prompts, secrets, stdout/stderr dumps, local tunnel URLs, SQLite data, or full JSON records into memory. The runner checks memory again after the manager returns and fails the task if a previously clean memory tree gained forbidden raw or secret markers.
+
 Every operator task should first check these locations for recent changes, then acquire the global runtime mutex before inspecting, deciding, editing, testing, or changing runtime state. Treat the files as the manager audit log and read only the relevant latest records needed for the task. When these runtime logs need cleanup, use the context compact helper's guarded runtime-log purge so only compressed metadata is written to handoff memory before regular log files are deleted.
 
 ## Context Compression Handoffs

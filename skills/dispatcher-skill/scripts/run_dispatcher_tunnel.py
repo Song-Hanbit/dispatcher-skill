@@ -36,6 +36,7 @@ RESET_BYTECODE_SUFFIXES = (".pyc", ".pyo")
 REQUIRED_REPO_FILES = (
     REQUIREMENTS_FILE_NAME,
     "dispatcher_app/agent_registry.py",
+    "dispatcher_app/memory_bootstrap.py",
     "dispatcher_app/server.py",
     "dispatcher_app/dispatcher.py",
     "dispatcher_app/reboot.py",
@@ -157,6 +158,25 @@ def import_agent_registry(repo: Path):
     )
 
     return ensure_agents_file, read_agent_registry, upsert_agent_registry_agent
+
+
+def import_memory_bootstrap(repo: Path):
+    repo_entry = str(repo)
+    if repo_entry not in sys.path:
+        sys.path.insert(0, repo_entry)
+    from dispatcher_app.memory_bootstrap import (
+        ensure_memory_compact_checkpoint,
+        ensure_role_memory_loaded,
+        memory_compact_checkpoint_status,
+        role_memory_status,
+    )
+
+    return (
+        ensure_memory_compact_checkpoint,
+        ensure_role_memory_loaded,
+        memory_compact_checkpoint_status,
+        role_memory_status,
+    )
 
 
 def ensure_agent_registry(repo: Path) -> bool:
@@ -555,6 +575,23 @@ def cloudflared_availability(repo: Path, path_arg: str | None) -> dict[str, obje
 def initialization_status(repo: Path) -> dict[str, object]:
     missing_files = [path for path in REQUIRED_REPO_FILES if not (repo / path).is_file()]
     agents_status = agent_registry_status(repo)
+    try:
+        _, _, memory_compact_checkpoint_status, role_memory_status = import_memory_bootstrap(repo)
+        operator_memory_status = role_memory_status(repo, "operator")
+        memory_compact_status = memory_compact_checkpoint_status(repo)
+    except Exception as exc:
+        operator_memory_status = {
+            "role_key": "operator",
+            "ok": False,
+            "missing": [],
+            "documents": [],
+            "error": str(exc),
+        }
+        memory_compact_status = {
+            "ok": False,
+            "checked_files": 0,
+            "issues": [{"path": "memory", "line": 0, "reason": str(exc)}],
+        }
     env_path = local_env_path(repo)
     config_path = local_config_path(repo)
     env_values = read_shell_env(env_path)
@@ -589,6 +626,10 @@ def initialization_status(repo: Path) -> dict[str, object]:
         "config_file_exists": config_path.is_file(),
         "missing_files": missing_files,
         "missing_settings": missing_settings,
+        "operator_memory_ready": bool(operator_memory_status.get("ok")),
+        "operator_memory": operator_memory_status,
+        "memory_compact_ready": bool(memory_compact_status.get("ok")),
+        "memory_compact_checkpoint": memory_compact_status,
         "host": env_values.get("DISPATCHER_HOST", ""),
         "port": env_values.get("DISPATCHER_PORT", ""),
         "session": env_values.get("DISPATCHER_SESSION", ""),
@@ -1169,6 +1210,9 @@ def run_foreground(args: argparse.Namespace, repo: Path, cloudflared: str) -> in
 
 def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
     validate_repo_requirements(repo)
+    ensure_memory_compact_checkpoint, ensure_role_memory_loaded, _, _ = import_memory_bootstrap(repo)
+    operator_memory = ensure_role_memory_loaded(repo, "operator")
+    compact_checkpoint = ensure_memory_compact_checkpoint(repo)
     agents_created = ensure_agent_registry(repo)
     operator_key = operator_key_from_sources(args.operator_key)
     existing = read_shell_env(local_env_path(repo))
@@ -1206,6 +1250,12 @@ def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
         print(f"Verified local agent registry at {agents_path(repo)}", flush=True)
     if operator_key_recorded:
         print("Recorded operator Codex handle in local agent registry.", flush=True)
+    memory_paths = ", ".join(document.path for document in operator_memory)
+    print(f"Loaded operator initialization memory: {memory_paths}", flush=True)
+    print(
+        f"Initialization compact checkpoint passed for {compact_checkpoint['checked_files']} memory file(s).",
+        flush=True,
+    )
     print(f"Initialized dispatcher skill runtime state in {local_state_dir(repo)}", flush=True)
     print(f"Repository: {repo}", flush=True)
     print(f"Configured local URL: http://{args.host}:{port}", flush=True)

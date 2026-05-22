@@ -85,16 +85,23 @@ button {
 }
 button.secondary { background: #fff; color: var(--accent); }
 button.danger { border-color: var(--bad); background: var(--bad); }
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.approval-form {
+.approval-form,
+.continuation-form {
   margin-top: 10px;
   max-width: 100%;
   min-width: 0;
 }
-.approval-form label {
+.approval-form label,
+.continuation-form label {
   margin-top: 0;
 }
-.approval-form textarea {
+.approval-form textarea,
+.continuation-form textarea {
   min-height: 72px;
 }
 .board {
@@ -140,8 +147,27 @@ button.danger { border-color: var(--bad); background: var(--bad); }
 .card.failed { border-left-color: var(--bad); }
 .card.canceled { border-left-color: var(--muted); }
 .card.done { border-left-color: var(--good); }
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.card-select {
+  display: flex;
+  align-items: center;
+  min-width: 18px;
+  margin: 1px 0 0;
+}
+.card-select input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
 .meta, .event { color: var(--muted); font-size: 12px; }
 .card-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   border: 0;
   border-radius: 0;
@@ -229,6 +255,24 @@ pre {
   min-width: 0;
   overflow-x: hidden;
   overflow-wrap: anywhere;
+}
+.bulk-actions {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px;
+  background: #eef3f9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.bulk-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bulk-buttons button {
+  padding: 7px 9px;
+  font-size: 12px;
 }
 .event {
   max-width: 100%;
@@ -639,6 +683,23 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.steering-form {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 520px);
+  margin-top: 4px;
+  margin-left: auto;
+  padding-top: 2px;
+}
+.steering-form textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.steering-form .actions {
+  justify-content: flex-end;
 }
 .activity-message {
   margin-top: 4px;

@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .memory_bootstrap import (
+    compact_checkpoint_issue_summary,
+    manager_memory_prompt_block,
+    memory_compact_checkpoint_status,
+)
+
 
 DECISIONS = {"execute", "needs_approval", "failed"}
 MAX_RUNNER_EVENT_MESSAGE_CHARS = 800
@@ -77,6 +83,7 @@ class CodexManagerRunner:
         run_id = f"task-{task['id']}-{int(time.time())}"
         output_path = self.run_dir / f"{run_id}.json"
         prompt = build_manager_prompt(task, manager, worker_catalog, repo=self.repo)
+        memory_checkpoint_before = memory_compact_checkpoint_status(self.repo)
         command = self._command(manager.key, output_path)
         workspace_root = codex_workspace_root(self.repo)
         manager_log_path = agent_log_path(self.conversation_dir, manager.role_key)
@@ -231,6 +238,19 @@ class CodexManagerRunner:
                 error=error or repr(exc),
                 manager_key=manager_key,
             )
+        memory_compact_error = ""
+        memory_checkpoint_after = memory_compact_checkpoint_status(self.repo)
+        if memory_checkpoint_before.get("ok") and not memory_checkpoint_after.get("ok"):
+            memory_compact_error = compact_checkpoint_issue_summary(memory_checkpoint_after)
+            decision = ManagerDecision(
+                decision="failed",
+                summary="Memory compact checkpoint failed.",
+                error=(
+                    "Manager work introduced raw runtime, transcript, prompt, secret, "
+                    f"or tunnel material into durable memory: {memory_compact_error}"
+                ),
+                manager_key=manager_key,
+            )
         if returncode != 0:
             append_agent_jsonl(
                 manager_log_path,
@@ -263,6 +283,8 @@ class CodexManagerRunner:
             },
             "manager_key": manager_key,
         }
+        if memory_compact_error:
+            final_record["memory_compact_error"] = memory_compact_error
         append_agent_jsonl(manager_log_path, final_record)
         return ManagerDecision(
             decision=decision.decision,
@@ -929,6 +951,7 @@ def build_manager_prompt(
     repo: Path | None = None,
 ) -> str:
     repo_root = (repo or Path.cwd()).resolve()
+    memory_bootstrap = manager_memory_prompt_block(repo_root, manager.role_key)
     worker_command = skill_root_command(
         repo_root,
         f"python3 -m dispatcher_app.worker_client call --task-id {task['id']} --manager-role-key {manager.role_key} --worker-role-key <worker.role_key> --worker-name <manager-chosen-worker-name> --prompt-file <path>",
@@ -951,6 +974,7 @@ def build_manager_prompt(
             "priority": task["priority"],
             "approved": bool(task["approved"]),
             "attempt_count": task["attempt_count"],
+            "steering_messages": task.get("steering_messages") or [],
         },
         "worker_catalog": worker_catalog,
     }
@@ -962,6 +986,7 @@ def build_manager_prompt(
             "Your file-action scope is the whole repository working tree passed to Codex, not only the dispatcher skill payload.",
             "If this skill is nested under .agents/skills/dispatcher-skill or skills/dispatcher-skill, repository-level files such as AGENTS.md and skill-migration-memory/ are in scope for non-runtime task work.",
             "Run dispatcher_app helper commands from the dispatcher skill root; use the command forms below.",
+            memory_bootstrap,
             "Use the worker_catalog as context for worker identities, but do not use Codex subagent tools for workers.",
             "If worker agents are useful, request a dispatcher-owned worker through the local worker client command.",
             "When initializing or renaming a dispatcher-owned worker, choose a concise human display name and pass it with --worker-name.",
@@ -989,6 +1014,7 @@ def build_manager_prompt(
             "Use the same language as the user's task for user-facing field values, while keeping the JSON field names exactly as specified.",
             "Before performing risky work, inspect payload.task.approved. If it is false and the request involves destructive changes, deployment, production data, payment, external APIs, secrets, or other user-approval-sensitive actions, do not perform the action; return needs_approval with your own concise summary and reason.",
             "If the user approved a paused task with notes, those notes are appended to task.acceptance_criteria under a clearly labeled user approval note section; treat them as additional user guidance.",
+            "If payload.task.steering_messages is nonempty, treat those messages as user steering or continuation guidance for this task, ordered oldest to newest.",
             "",
             "Return a single JSON object with these string fields:",
             '- decision: one of "execute", "needs_approval", "failed"',

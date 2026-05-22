@@ -7,6 +7,8 @@ const lanes = [
   { key: "closed", label: "Closed", statuses: ["failed", "canceled"] }
 ];
 const activityConversationTypes = new Set([
+  "user_continuation",
+  "user_steering",
   "manager_command",
   "manager_file_change",
   "manager_delegation",
@@ -49,6 +51,7 @@ const statusline = document.getElementById("statusline");
 const lockline = document.getElementById("lockline");
 const safetyRefreshIntervalMs = 500;
 const expandedTasks = new Set();
+const selectedInboxTasks = new Set();
 const expandedAgents = new Set();
 const collapsedDirectories = new Set();
 const knownDirectoryPaths = new Set();
@@ -341,9 +344,11 @@ function connectEventStream() {
 
 function render(tasks) {
   rememberTasks(tasks);
+  pruneInboxSelection(tasks);
   const renderKey = stableRenderKey({
     tasks,
-    expanded: [...expandedTasks].sort((a, b) => a - b)
+    expanded: [...expandedTasks].sort((a, b) => a - b),
+    selectedInbox: [...selectedInboxTasks].sort((a, b) => a - b)
   });
   if (renderKey === lastTaskRenderKey) return;
   lastTaskRenderKey = renderKey;
@@ -358,6 +363,7 @@ function render(tasks) {
   board.innerHTML = lanes.map(lane => `
     <div class="lane" data-status="${escapeHtml(lane.key)}">
       <h3>${escapeHtml(lane.label)} (${grouped[lane.key].length})</h3>
+      ${lane.key === "inbox" ? inboxBulkControls(grouped[lane.key]) : ""}
       ${grouped[lane.key].map(taskCard).join("") || '<div class="meta">No tasks</div>'}
     </div>
   `).join("");
@@ -371,6 +377,17 @@ function rememberTasks(tasks) {
   tasks.forEach(task => {
     tasksById.set(Number(task.id), task);
   });
+}
+
+function pruneInboxSelection(tasks) {
+  const inboxIds = new Set(
+    tasks
+      .filter(task => task.status === "inbox")
+      .map(task => Number(task.id))
+  );
+  for (const id of [...selectedInboxTasks]) {
+    if (!inboxIds.has(id)) selectedInboxTasks.delete(id);
+  }
 }
 
 function taskLabel(task) {
@@ -442,13 +459,26 @@ function taskCard(task) {
     <div class="event">${escapeHtml(event.created_at)} - ${escapeHtml(event.type)}: ${escapeHtml(event.message)}</div>
   `).join("");
   const controls = controlsFor(task);
+  const inboxSelect = task.status === "inbox" ? `
+    <label class="card-select" title="Select Inbox task">
+      <input
+        type="checkbox"
+        aria-label="Select ${escapeHtml(taskLabel(task))}"
+        ${selectedInboxTasks.has(Number(task.id)) ? "checked" : ""}
+        onchange="toggleInboxSelection(${task.id}, this.checked)"
+      >
+    </label>
+  ` : "";
   return `
     <article class="card ${escapeHtml(task.status)} ${expanded ? "expanded" : ""}">
-      <button class="card-toggle" type="button" onclick="toggleTask(${task.id})" aria-expanded="${expanded ? "true" : "false"}">
-        <div class="title">
-          <span class="title-text">${escapeHtml(taskLabel(task))}</span>
-        </div>
-      </button>
+      <div class="card-head">
+        ${inboxSelect}
+        <button class="card-toggle" type="button" onclick="toggleTask(${task.id})" aria-expanded="${expanded ? "true" : "false"}">
+          <div class="title">
+            <span class="title-text">${escapeHtml(taskLabel(task))}</span>
+          </div>
+        </button>
+      </div>
       ${expanded ? `
         <div class="card-body">
           <div class="meta">status ${escapeHtml(task.status)} - priority ${task.priority} - attempts ${task.attempt_count}</div>
@@ -460,6 +490,25 @@ function taskCard(task) {
         </div>
       ` : ""}
     </article>
+  `;
+}
+
+function inboxBulkControls(inboxTasks) {
+  const inboxIds = inboxTasks.map(task => Number(task.id));
+  const selectedCount = inboxIds.filter(id => selectedInboxTasks.has(id)).length;
+  if (!inboxIds.length) {
+    return '<div class="bulk-actions"><span class="meta">No Inbox tasks</span></div>';
+  }
+  return `
+    <div class="bulk-actions">
+      <div class="bulk-buttons">
+        <button class="secondary" type="button" onclick="selectAllInboxTasks()">Select all</button>
+        <button class="secondary" type="button" onclick="clearInboxSelection()" ${selectedCount ? "" : "disabled"}>Clear</button>
+        <button type="button" onclick="queueSelectedInbox()" ${selectedCount ? "" : "disabled"}>Queue selected</button>
+        <button type="button" onclick="queueAllInbox()">Queue all</button>
+      </div>
+      <div class="meta">${selectedCount} selected / ${inboxIds.length} Inbox</div>
+    </div>
   `;
 }
 
@@ -486,7 +535,8 @@ function managerActivityCard(manager) {
   const messages = task
     ? [
         taskPromptMessage(task),
-        entries.length ? entries.map(activityEntry).join("") : '<div class="meta">Waiting for activity</div>'
+        entries.length ? entries.map(activityEntry).join("") : '<div class="meta">Waiting for activity</div>',
+        steeringControls(task)
       ].join("")
     : '<div class="meta">No activity yet</div>';
   return `
@@ -744,6 +794,8 @@ function activityRole(type) {
 
 function activityLabel(type) {
   const actor = activityActor(type);
+  if (type === "user_continuation") return "user continuation";
+  if (type === "user_steering") return "user steering";
   if (actor && isActorEventType(type, "command")) return `${actor} command`;
   if (actor && isActorEventType(type, "file_change")) return `${actor} file change`;
   if (actor && isActorEventType(type, "delegation")) return `${actor} delegation`;
@@ -757,6 +809,7 @@ function activityLabel(type) {
 
 function activityActor(type) {
   const value = String(type);
+  if (value.startsWith("user_")) return "user";
   if (value.startsWith("manager_")) return "manager";
   if (value.startsWith("worker_")) return "worker";
   if (value.startsWith("operator_")) return "operator";
@@ -771,6 +824,19 @@ function isActorEventType(type, suffix) {
 
 function formatChatText(value) {
   return escapeHtml(value).replace(/\n/g, "<br>");
+}
+
+function steeringControls(task) {
+  if (!task || task.status !== "in_progress") return "";
+  const inputId = `steering-message-${task.id}`;
+  return `
+    <form class="steering-form" onsubmit="sendSteering(event, ${task.id})">
+      <textarea id="${escapeHtml(inputId)}" rows="3" maxlength="4000" placeholder="Steering message"></textarea>
+      <div class="actions">
+        <button type="submit">Send</button>
+      </div>
+    </form>
+  `;
 }
 
 function commandLineText(value) {
@@ -932,6 +998,37 @@ function toggleTask(id) {
   refresh({ force: true });
 }
 
+function rerenderTasks() {
+  lastTaskRenderKey = "";
+  render([...tasksById.values()]);
+}
+
+function toggleInboxSelection(id, checked) {
+  const taskId = Number(id);
+  const task = tasksById.get(taskId);
+  if (!task || task.status !== "inbox") return;
+  if (checked) {
+    selectedInboxTasks.add(taskId);
+  } else {
+    selectedInboxTasks.delete(taskId);
+  }
+  rerenderTasks();
+}
+
+function selectAllInboxTasks() {
+  for (const task of tasksById.values()) {
+    if (task.status === "inbox") {
+      selectedInboxTasks.add(Number(task.id));
+    }
+  }
+  rerenderTasks();
+}
+
+function clearInboxSelection() {
+  selectedInboxTasks.clear();
+  rerenderTasks();
+}
+
 function toggleAgent(roleKey) {
   if (expandedAgents.has(roleKey)) {
     expandedAgents.delete(roleKey);
@@ -993,7 +1090,7 @@ function controlsFor(task) {
     return approvalControls(task);
   }
   if (["failed", "canceled", "done"].includes(task.status)) {
-    buttons.push(`<button class="secondary" onclick="act(${task.id}, 'retry')">Retry</button>`);
+    return continuationControls(task);
   }
   if (!["done", "canceled"].includes(task.status)) {
     buttons.push(`<button class="danger" onclick="act(${task.id}, 'cancel')">Cancel</button>`);
@@ -1012,6 +1109,20 @@ function approvalControls(task) {
         <button class="danger" onclick="act(${task.id}, 'cancel')">Cancel</button>
       </div>
     </div>
+  `;
+}
+
+function continuationControls(task) {
+  const messageId = `continuation-message-${task.id}`;
+  return `
+    <form class="continuation-form" onsubmit="sendContinuation(event, ${task.id})">
+      <label for="${escapeHtml(messageId)}">Continue this task</label>
+      <textarea id="${escapeHtml(messageId)}" rows="3" maxlength="4000" placeholder="Write the next instruction"></textarea>
+      <div class="actions">
+        <button type="submit">Send to Pending</button>
+        <button class="secondary" type="button" onclick="act(${task.id}, 'retry')">Retry without note</button>
+      </div>
+    </form>
   `;
 }
 
@@ -1062,6 +1173,44 @@ async function moveInboxTaskToForm(id) {
 async function act(id, action) {
   try {
     await request(`/api/tasks/${id}/${action}`, { method: "POST" });
+    if (action === "queue" || action === "delete") {
+      selectedInboxTasks.delete(Number(id));
+    }
+    await refresh({ force: true });
+  } catch (error) {
+    handleLoadError(error);
+  }
+}
+
+async function queueSelectedInbox() {
+  const ids = [...selectedInboxTasks]
+    .filter(id => {
+      const task = tasksById.get(Number(id));
+      return task && task.status === "inbox";
+    })
+    .sort((a, b) => a - b);
+  if (!ids.length) return;
+  await queueInboxBulk({ scope: "selected", ids });
+}
+
+async function queueAllInbox() {
+  const inboxCount = [...tasksById.values()].filter(task => task.status === "inbox").length;
+  if (!inboxCount) return;
+  await queueInboxBulk({ scope: "all" });
+}
+
+async function queueInboxBulk(payload) {
+  try {
+    const result = await request("/api/tasks/bulk-queue", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    for (const id of result.ids || []) {
+      selectedInboxTasks.delete(Number(id));
+    }
+    if (payload.scope === "all") {
+      selectedInboxTasks.clear();
+    }
     await refresh({ force: true });
   } catch (error) {
     handleLoadError(error);
@@ -1076,6 +1225,46 @@ async function approveWithNote(id) {
       method: "POST",
       body: JSON.stringify({ note })
     });
+    await refresh({ force: true });
+  } catch (error) {
+    handleLoadError(error);
+  }
+}
+
+async function sendSteering(event, id) {
+  event.preventDefault();
+  const field = document.getElementById(`steering-message-${id}`);
+  const message = field ? field.value.trim() : "";
+  if (!message) {
+    if (field) field.focus();
+    return;
+  }
+  try {
+    await request(`/api/tasks/${id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ message })
+    });
+    if (field) field.value = "";
+    await refresh({ force: true });
+  } catch (error) {
+    handleLoadError(error);
+  }
+}
+
+async function sendContinuation(event, id) {
+  event.preventDefault();
+  const field = document.getElementById(`continuation-message-${id}`);
+  const message = field ? field.value.trim() : "";
+  if (!message) {
+    if (field) field.focus();
+    return;
+  }
+  try {
+    await request(`/api/tasks/${id}/continue`, {
+      method: "POST",
+      body: JSON.stringify({ message })
+    });
+    if (field) field.value = "";
     await refresh({ force: true });
   } catch (error) {
     handleLoadError(error);
