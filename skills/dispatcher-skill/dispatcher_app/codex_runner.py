@@ -992,7 +992,7 @@ def build_manager_prompt(
             "When initializing or renaming a dispatcher-owned worker, choose a concise human display name and pass it with --worker-name.",
             "Write the worker instructions to a temporary prompt file, then run:",
             worker_command,
-            "The worker client queues the request in SQLite and blocks until the dispatcher-run worker finishes.",
+            "The worker client queues the request through the dispatcher server API by default and blocks until the dispatcher-run worker finishes. Direct SQLite access is only an explicit --transport db fallback for debugging or recovery.",
             "Only the active manager for the current in-progress task can queue worker requests; this is the manager-worker mutex.",
             "Worker execution is transitional: until the dispatcher-owned worker path is verified end to end, you may still implement directly when worker use is unavailable, fails, or would block the task.",
             "Prefer delegating scoped implementation or verification to a worker when it is useful and feasible; after worker execution is proven reliable, manager direct implementation will be restricted.",

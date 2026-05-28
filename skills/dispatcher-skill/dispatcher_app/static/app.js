@@ -1092,6 +1092,9 @@ function controlsFor(task) {
   if (["failed", "canceled", "done"].includes(task.status)) {
     return continuationControls(task);
   }
+  if (task.status === "pending") {
+    buttons.push(`<button class="secondary" onclick="act(${task.id}, 'inbox')">Move to Inbox</button>`);
+  }
   if (!["done", "canceled"].includes(task.status)) {
     buttons.push(`<button class="danger" onclick="act(${task.id}, 'cancel')">Cancel</button>`);
   }

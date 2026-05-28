@@ -38,7 +38,7 @@ python3 scripts/run_dispatcher_tunnel.py reset --repo <candidate>
 python3 scripts/run_dispatcher_tunnel.py init-status --repo .
 ```
 
-`init-status` reports whether required dispatcher files and ignored local settings exist. It may report `password_set`, but it must not print the password.
+`init-status` reports whether required dispatcher files and ignored local settings exist. It may report `password_set` and `helper_token_set`, but it must not print the password or helper token.
 
 `init-status` also reports `operator_memory_ready` and `memory_compact_ready` with file-level metadata only. It must not print memory contents, secrets, local env values, runtime logs, or tunnel URLs.
 
@@ -50,7 +50,7 @@ When `cloudflared` is missing or unconfigured, `init-status` also prints copy-re
 python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path> --port <port>
 ```
 
-`init` verifies the repo root, loads the required operator initialization memory, runs the memory compact checkpoint, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, records the operator Codex handle from `--operator-key`, `DISPATCHER_OPERATOR_KEY`, or `CODEX_THREAD_ID` when available, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`.
+`init` verifies the repo root, loads the required operator initialization memory, runs the memory compact checkpoint, resolves host/port/session choices, creates or validates the ignored per-repository `dispatcher_app/agents.json`, records the operator Codex handle from `--operator-key`, `DISPATCHER_OPERATOR_KEY`, or `CODEX_THREAD_ID` when available, writes ignored local settings, and starts the runtime plus Quick Tunnel unless `--no-start` is supplied. The written local files are `dispatcher_app/agents.json`, `data/dispatcher.env`, and `data/run-dispatcher-tunnel.json`. `data/dispatcher.env` includes a per-install `DISPATCHER_HELPER_TOKEN` for manager helper API calls; `data/run-dispatcher-tunnel.json` records only whether that token is set.
 
 After `init` creates the default `dispatcher_app/agents.json`, complete any known missing local agent fields before relying on the runtime. Keep the file limited to `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`; leave unknown Codex handles as `null` with `key_status: "missing"` so the dispatcher can populate them on first use. Manager keys are recorded after manager Codex startup, and dispatcher-owned worker keys are recorded as soon as the worker Codex session emits `thread.started`. Do not add secrets, provider tokens, passwords, tunnel URLs, policy text, or lifecycle notes to `agents.json`.
 
@@ -63,6 +63,8 @@ python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py url --r
 Do not store the generated URL itself in memory or durable docs.
 
 Password input choices are, in priority order: `--password`, `--password-file`, `DISPATCHER_PASSWORD`, an existing `data/dispatcher.env`, then an interactive prompt when a TTY is available. Prefer `--password-file`, `DISPATCHER_PASSWORD`, or prompt for real secrets. Do not print or copy passwords into memory.
+
+Helper-token input choices are `DISPATCHER_HELPER_TOKEN`, an existing `data/dispatcher.env`, or an auto-generated per-install token during `init`. Runtime `start`, `restart-*`, and `foreground` backfill a missing helper token into an existing env file before launching server/dispatcher processes, so manager subprocesses inherit the same local API credential. Do not print or copy helper token values into memory or tracked docs.
 
 Cloudflared input choices are, in priority order: `--cloudflared`, persisted `DISPATCHER_CLOUDFLARED`, ignored local `data/bin/cloudflared`, PATH `cloudflared`, then optional package-local `bin/cloudflared` when a profile intentionally ships it. `init` persists a resolved `--cloudflared` or installer path into `data/dispatcher.env`.
 
@@ -94,9 +96,9 @@ python3 scripts/run_dispatcher_tunnel.py foreground --repo <repo> --port <port>
 ## Choices
 
 - Skill root: use `--repo .agents/skills/dispatcher-skill` from a project-local npx install's repository root, `--repo skills/dispatcher-skill` in this source repository, or `--repo .` from the skill root itself. The helper validates `dispatcher_app/server.py`, `dispatcher_app/dispatcher.py`, and `dispatcher_app/reboot.py`.
-- Port: default is `8000`; if the requested port is busy, the helper chooses a free fallback unless `--strict-port` is supplied. Use `--port 0` to always choose a random free port. `init --no-start` requires a concrete port, not `--port 0`.
+- Port: default is `8000`; the helper first checks occupied ports with `ss -H -tuln` and then verifies candidates with bind probes. If the requested port is busy, it chooses a free fallback unless `--strict-port` is supplied. Use `--port 0` to always choose a random free port. `init --no-start` requires a concrete port, not `--port 0`.
 - Session: determine the repository name by searching the directory hierarchy instead of guessing from the skill directory name. If the skill root is `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/` as `<repo>`; if it is `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`; otherwise use the validated dispatcher root directory name. `init` generates `<repo>-tunnel` when no `--session` or stored session exists. For example, this development repository uses `dispatcher-skill-tunnel`. Other commands use the stored env setting, an explicit `--session`, or the same `<repo>-tunnel` default. The helper addresses tmux sessions with exact `=session` targets internally so `repo-tunnel` and `repo-tunnel-old` style names do not collide through tmux prefix matching.
-- Password/env: the dispatcher server receives `DISPATCHER_PASSWORD` from the ignored local env file after init. `data/dispatcher.env` is installation-local state, not package payload.
+- Password/env: the dispatcher server receives `DISPATCHER_PASSWORD` and `DISPATCHER_HELPER_TOKEN` from the ignored local env file after init. The dispatcher process inherits the same env so manager-run `worker_client` can use the server API by default. `data/dispatcher.env` is installation-local state, not package payload.
 - Cloudflared: prefer `--cloudflared ~/.local/bin/cloudflared` for a server-local user install, another host-managed binary path, PATH for system installs, or ignored `data/bin/cloudflared` for repo-local throwaway installs. Do not make a large binary part of exported skill payload unless the packaging profile intentionally includes a vetted binary.
 
 ## Safety And Packaging

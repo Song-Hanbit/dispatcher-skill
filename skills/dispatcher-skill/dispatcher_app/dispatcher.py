@@ -164,6 +164,7 @@ class DispatcherLoop:
             manager = self.registry.default_manager()
             self.clear_finished_task_threads()
             self.store.reclaim_expired(exclude_task_ids=self.active_task_ids())
+            self.store.reclaim_stale_task_runtime_lock(GLOBAL_RUNTIME_LOCK)
             self.service_worker_requests()
             if self.has_unprocessed_reboot_requests():
                 return

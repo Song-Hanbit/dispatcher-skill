@@ -29,9 +29,13 @@ This file keeps compact, portable working context for installed dispatcher skill
 - UI panel defaults are viewport-aware: compact viewports start with every panel collapsed, while larger viewports open Activity, Agent status, New task, and Queue by default and keep Directory plus task cards collapsed.
 - Tmux session defaults use `<repo>-tunnel`, where `<repo>` is found by searching the directory hierarchy. For nested installs at `<repo>/.agents/skills/dispatcher-skill`, use the parent directory above `.agents/`; for `<repo>/skills/dispatcher-skill`, use the parent directory above `skills/`, not the `dispatcher-skill` directory name. This development repository's default is `dispatcher-skill-tunnel`.
 - Init/start summaries end with a no-`cd` command for checking the current Quick Tunnel URL; memory and durable docs still omit the generated URL itself.
-- Manager and dispatcher-owned worker calls explicitly set non-interactive approval policy plus `--sandbox workspace-write --cd <repo>` so task-plane agents can edit the skill repo and use SQLite-backed worker requests instead of inheriting a read-only Codex CLI default.
+- Manager and dispatcher-owned worker calls explicitly set non-interactive approval policy plus `--sandbox workspace-write --cd <repo>` so task-plane agents can edit the skill repo, while worker request creation now goes through the dispatcher helper API by default instead of requiring manager-side DB writes.
 - Inbox has selected/all bulk queue controls backed by `POST /api/tasks/bulk-queue`; the server only moves current Inbox rows to Pending and reports skipped stale or non-Inbox selections safely.
+- Pending cards can now be moved back to Inbox; the action is accepted only while the task is still `pending`, clears `queued_at`, and removes the card from dispatcher claim order until queued again.
 - Done and Closed task cards now have an in-card continuation form that records a `user_continuation` note and sends the same task back to Pending; in-progress steering remains a separate Activity-only flow for currently running tasks.
+- Worker request creation and lookup now have helper-token protected server API endpoints, and `worker_client call` uses them by default. Direct SQLite access remains available only through explicit `--transport db` debugging or recovery fallback.
+- Runtime init writes a per-install helper API token only to ignored local env, reports only `helper_token_set`, and passes the same env to server, dispatcher, and manager subprocesses so nested skill installs can use worker API requests without manager-side DB writes.
+- The dispatcher now reclaims stale task-owned runtime locks whose task is no longer `in_progress` before worker servicing or pending-task claims, covering the failure mode where manager runtime is idle but an unexpired stale task lock blocks the next Pending card.
 
 ## Verification Summary
 

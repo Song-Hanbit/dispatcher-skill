@@ -32,6 +32,7 @@ STATUSES = [
 AUTH_PASSWORD = os.environ.get("DISPATCHER_PASSWORD", "")
 COOKIE_NAME = "dispatcher_session"
 SESSION_TOKEN = secrets.token_urlsafe(32)
+HELPER_TOKEN_ENV = "DISPATCHER_HELPER_TOKEN"
 BASE_DIR = Path(__file__).resolve().parent
 MAX_USER_TASK_MESSAGE_CHARS = 4000
 CONTINUABLE_STATUSES = {"done", "failed", "canceled"}
@@ -482,6 +483,28 @@ def public_runtime_lock(lock: dict[str, Any] | None) -> dict[str, Any] | None:
     public = dict(lock)
     public.pop("fencing_token", None)
     return public
+
+
+def public_worker_request(request: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "id",
+        "task_id",
+        "manager_role_key",
+        "worker_role_key",
+        "worker_name",
+        "status",
+        "result",
+        "error",
+        "owner",
+        "lease_expires_at",
+        "heartbeat_at",
+        "progress",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "completed_at",
+    )
+    return {field: request.get(field) for field in fields}
 
 
 def should_hide_event(row: sqlite3.Row | dict[str, Any]) -> bool:
@@ -1527,6 +1550,56 @@ class Store:
             )
             return cur.rowcount > 0
 
+    def reclaim_stale_task_runtime_lock(self, resource: str) -> bool:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_locks
+                WHERE resource = ?
+                """,
+                (resource,),
+            ).fetchone()
+            if row is None or row["owner_plane"] != "task":
+                return False
+
+            task_id = row["task_id"]
+            if task_id is None and float(row["lease_expires_at"] or 0) >= time.time():
+                return False
+            if task_id is not None:
+                task = conn.execute(
+                    """
+                    SELECT status
+                    FROM tasks
+                    WHERE id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if task is not None and task["status"] == "in_progress":
+                    return False
+
+            cur = conn.execute(
+                """
+                DELETE FROM runtime_locks
+                WHERE resource = ?
+                  AND fencing_token = ?
+                """,
+                (resource, row["fencing_token"]),
+            )
+            if cur.rowcount <= 0:
+                return False
+            task_label = f" task #{task_id}" if task_id is not None else ""
+            self._insert_event(
+                conn,
+                None,
+                "runtime_lock_reclaimed",
+                f"Reclaimed stale task runtime lock for {row['owner_id']}{task_label}.",
+                now,
+            )
+            return True
+
     def get_runtime_lock(self, resource: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -1934,6 +2007,32 @@ class Store:
             self._insert_event(conn, task_id, "task_queued", "User moved task from Inbox to Pending.", now)
             return True
 
+    def move_task_to_inbox(self, task_id: int) -> bool:
+        now = utc_now()
+        with self.connect() as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                return False
+            if row["status"] != "pending":
+                return False
+            cur = conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'inbox',
+                    owner = NULL,
+                    lease_expires_at = NULL,
+                    queued_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'pending'
+                """,
+                (now, task_id),
+            )
+            if cur.rowcount <= 0:
+                return False
+            self._insert_event(conn, task_id, "task_unqueued", "User moved task from Pending to Inbox.", now)
+            return True
+
     def queue_inbox_tasks(self, task_ids: list[int] | None = None) -> dict[str, Any]:
         now = utc_now()
         base_queued_at = queue_now()
@@ -2217,6 +2316,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        worker_request_match = re.fullmatch(r"/api/worker-requests/(\d+)", path)
+        if worker_request_match:
+            if not self.require_helper_authenticated():
+                return
+            request = self.server.store.get_worker_request(int(worker_request_match.group(1)))
+            if request is None:
+                self.send_error(404, "Worker request not found")
+                return
+            self.send_json({"request": public_worker_request(request)})
+            return
         if path.startswith("/static/"):
             self.send_static(path.removeprefix("/static/"))
             return
@@ -2269,6 +2378,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_login("Wrong password.", status=401)
             return
+        if path == "/api/worker-requests":
+            auth_failure = self.helper_auth_failure()
+            if auth_failure is not None:
+                self.discard_request_body()
+                self.send_json({"error": auth_failure[1]}, status=auth_failure[0])
+                return
+            self.handle_worker_request_create()
+            return
         if not self.is_authenticated():
             self.discard_request_body()
             self.require_authenticated(path)
@@ -2289,7 +2406,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, **result})
             return
 
-        match = re.fullmatch(r"/api/tasks/(\d+)/(approve|retry|cancel|queue|delete)", path)
+        match = re.fullmatch(r"/api/tasks/(\d+)/(approve|retry|cancel|queue|inbox|delete)", path)
         if match:
             task_id = int(match.group(1))
             action = match.group(2)
@@ -2302,6 +2419,7 @@ class Handler(BaseHTTPRequestHandler):
                     "retry": self.server.store.retry_task,
                     "cancel": self.server.store.cancel_task,
                     "queue": self.server.store.queue_task,
+                    "inbox": self.server.store.move_task_to_inbox,
                     "delete": self.server.store.delete_task,
                 }[action](task_id)
             if not ok:
@@ -2353,6 +2471,36 @@ class Handler(BaseHTTPRequestHandler):
         self.discard_request_body()
         self.send_error(404, "Not found")
 
+    def handle_worker_request_create(self) -> None:
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Request body must be valid JSON."}, status=400)
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"error": "Request body must be a JSON object."}, status=400)
+            return
+        try:
+            task_id = int(payload.get("task_id"))
+        except (TypeError, ValueError):
+            self.send_json({"error": "task_id must be an integer."}, status=400)
+            return
+        try:
+            request_id = self.server.store.create_worker_request(
+                task_id,
+                str(payload.get("manager_role_key") or ""),
+                str(payload.get("worker_role_key") or ""),
+                str(payload.get("prompt") or ""),
+                worker_name=str(payload.get("worker_name") or ""),
+            )
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        except RuntimeError as exc:
+            self.send_json({"error": str(exc)}, status=409)
+            return
+        self.send_json({"ok": True, "id": request_id}, status=201)
+
     def is_authenticated(self) -> bool:
         raw_cookie = self.headers.get("Cookie", "")
         cookie = SimpleCookie(raw_cookie)
@@ -2369,6 +2517,28 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_login()
         return False
+
+    def helper_auth_token(self) -> str:
+        authorization = self.headers.get("Authorization", "")
+        if authorization.lower().startswith("bearer "):
+            return authorization[7:].strip()
+        return self.headers.get("X-Dispatcher-Helper-Token", "").strip()
+
+    def require_helper_authenticated(self) -> bool:
+        auth_failure = self.helper_auth_failure()
+        if auth_failure is None:
+            return True
+        self.send_json({"error": auth_failure[1]}, status=auth_failure[0])
+        return False
+
+    def helper_auth_failure(self) -> tuple[int, str] | None:
+        expected = os.environ.get(HELPER_TOKEN_ENV, "").strip()
+        if not expected:
+            return 503, "Helper API token is not configured."
+        supplied = self.helper_auth_token()
+        if not supplied or not secrets.compare_digest(supplied, expected):
+            return 401, "Helper authentication required."
+        return None
 
     def read_payload(self) -> dict[str, Any]:
         raw_bytes = self.read_body()

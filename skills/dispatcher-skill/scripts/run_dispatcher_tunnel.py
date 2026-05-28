@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -27,6 +28,7 @@ CONFIG_FILE_NAME = "run-dispatcher-tunnel.json"
 REQUIREMENTS_FILE_NAME = "requirements.md"
 CLOUDFLARED_ENV = "DISPATCHER_CLOUDFLARED"
 CLOUDFLARED_INSTALL_DIR_ENV = "DISPATCHER_CLOUDFLARED_INSTALL_DIR"
+HELPER_TOKEN_ENV = "DISPATCHER_HELPER_TOKEN"
 WORKSPACE_ROOT_ENV = "DISPATCHER_WORKSPACE_ROOT"
 CANDIDATE_OPERATOR_KEY_ENV = ("DISPATCHER_OPERATOR_KEY", "CODEX_THREAD_ID")
 RECOMMENDED_CLOUDFLARED_INSTALL_DIR = "~/.local/bin"
@@ -303,8 +305,12 @@ def print_json(payload: dict[str, object]) -> None:
 def read_shell_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
     values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -320,6 +326,31 @@ def read_shell_env(path: Path) -> dict[str, str]:
             continue
         values[key] = parsed[0] if parsed else ""
     return values
+
+
+def generated_helper_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def helper_token_from_sources(repo: Path) -> str:
+    existing = read_shell_env(local_env_path(repo)).get(HELPER_TOKEN_ENV, "")
+    return os.environ.get(HELPER_TOKEN_ENV) or existing or generated_helper_token()
+
+
+def ensure_local_helper_token(repo: Path) -> str:
+    env_path = local_env_path(repo)
+    if not env_path.is_file():
+        return os.environ.get(HELPER_TOKEN_ENV, "")
+    values = read_shell_env(env_path)
+    if values.get(HELPER_TOKEN_ENV):
+        return values[HELPER_TOKEN_ENV]
+    token = os.environ.get(HELPER_TOKEN_ENV) or generated_helper_token()
+    current = env_path.read_text(encoding="utf-8")
+    separator = "" if not current or current.endswith("\n") else "\n"
+    with env_path.open("a", encoding="utf-8") as file:
+        file.write(f"{separator}export {HELPER_TOKEN_ENV}={shlex.quote(token)}\n")
+    env_path.chmod(0o600)
+    return token
 
 
 def option_was_supplied(name: str) -> bool:
@@ -356,6 +387,7 @@ def apply_repo_defaults(args: argparse.Namespace, repo: Path) -> None:
 
 
 def dispatcher_env(repo: Path) -> dict[str, str]:
+    ensure_local_helper_token(repo)
     env = os.environ.copy()
     env.update(read_shell_env(local_env_path(repo)))
     env.setdefault(WORKSPACE_ROOT_ENV, workspace_root_value())
@@ -389,6 +421,7 @@ def command_with_repo_env(repo: Path, command: str) -> str:
     workspace_fallback = workspace_root_fallback_command()
     if not env_path.is_file():
         return f"{workspace_fallback}; {command}"
+    ensure_local_helper_token(repo)
     quoted = shlex.quote(str(env_path))
     return f"set -a; . {quoted}; set +a; {workspace_fallback}; {command}"
 
@@ -403,6 +436,7 @@ def write_local_state_files(
     state_dir = local_state_dir(repo)
     state_dir.mkdir(parents=True, exist_ok=True)
     env_path = local_env_path(repo)
+    helper_token = helper_token_from_sources(repo)
     env_lines = [
         "# Local dispatcher skill runtime settings. This directory is ignored by Git.",
         f"export DISPATCHER_REPO={shlex.quote(str(repo))}",
@@ -413,6 +447,7 @@ def write_local_state_files(
         f"export DISPATCHER_SESSION={shlex.quote(args.session)}",
         f"export DISPATCHER_PYTHON={shlex.quote(args.python)}",
         f"export DISPATCHER_PASSWORD={shlex.quote(password)}",
+        f"export {HELPER_TOKEN_ENV}={shlex.quote(helper_token)}",
     ]
     if args.cloudflared:
         env_lines.append(f"export {CLOUDFLARED_ENV}={shlex.quote(str(args.cloudflared))}")
@@ -432,6 +467,7 @@ def write_local_state_files(
         "session": args.session,
         "python": args.python,
         "password_set": True,
+        "helper_token_set": bool(helper_token),
         "cloudflared": cloudflared_path,
         "cloudflared_install_dir": str(args.cloudflared_install_dir or ""),
         "requirements_path": str(requirements_path(repo)),
@@ -603,6 +639,7 @@ def initialization_status(repo: Path) -> dict[str, object]:
         "DISPATCHER_SESSION",
         "DISPATCHER_PYTHON",
         "DISPATCHER_PASSWORD",
+        HELPER_TOKEN_ENV,
     )
     missing_settings = [key for key in required_settings if not env_values.get(key)]
     cloudflared_config = env_values.get(CLOUDFLARED_ENV, "")
@@ -634,6 +671,7 @@ def initialization_status(repo: Path) -> dict[str, object]:
         "port": env_values.get("DISPATCHER_PORT", ""),
         "session": env_values.get("DISPATCHER_SESSION", ""),
         "password_set": bool(env_values.get("DISPATCHER_PASSWORD")),
+        "helper_token_set": bool(env_values.get(HELPER_TOKEN_ENV)),
         "cloudflared_config": cloudflared_config,
         "cloudflared_install_dir": cloudflared_install_dir or str(local_bin_dir(repo)),
         "cloudflared_user_bin_install_command": cloudflared_commands["install"],
@@ -743,6 +781,47 @@ def find_cloudflared(repo: Path, path_arg: str | None, *, port: int = 8000) -> s
     raise SystemExit(cloudflared_missing_message(repo, port=port))
 
 
+def ss_local_port(field: str) -> int | None:
+    field = field.strip()
+    if not field:
+        return None
+    if field.startswith("["):
+        _, separator, port_text = field.rpartition("]:")
+        if not separator:
+            return None
+    else:
+        _, separator, port_text = field.rpartition(":")
+        if not separator:
+            return None
+    if not port_text.isdigit():
+        return None
+    return int(port_text)
+
+
+def ss_occupied_ports() -> set[int] | None:
+    try:
+        result = subprocess.run(
+            ["ss", "-H", "-tuln"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    ports: set[int] = set()
+    for line in result.stdout.splitlines():
+        columns = line.split()
+        if len(columns) < 5:
+            continue
+        port = ss_local_port(columns[4])
+        if port is not None:
+            ports.add(port)
+    return ports
+
+
 def port_probe_hosts(host: str) -> list[str]:
     hosts = [host, "127.0.0.1", "0.0.0.0"]
     if host == "localhost":
@@ -762,29 +841,32 @@ def bind_available(host: str, port: int) -> bool:
         return True
 
 
-def port_available(host: str, port: int) -> bool:
+def port_available(host: str, port: int, occupied_ports: set[int] | None = None) -> bool:
+    if occupied_ports is not None and port in occupied_ports:
+        return False
     return all(bind_available(candidate, port) for candidate in port_probe_hosts(host))
 
 
-def reserve_free_port(host: str) -> int:
+def reserve_free_port(host: str, occupied_ports: set[int] | None = None) -> int:
     for _ in range(100):
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as sock:
             sock.bind((host, 0))
             port = int(sock.getsockname()[1])
-        if port_available(host, port):
+        if port_available(host, port, occupied_ports):
             return port
     raise SystemExit("Could not find a free port that is available on the requested bind host and local wildcard addresses.")
 
 
 def choose_port(host: str, requested: int, strict: bool) -> int:
+    occupied_ports = ss_occupied_ports()
     if requested == 0:
-        return reserve_free_port(host)
-    if port_available(host, requested):
+        return reserve_free_port(host, occupied_ports)
+    if port_available(host, requested, occupied_ports):
         return requested
     if strict:
         raise SystemExit(f"Requested port {requested} is busy.")
-    fallback = reserve_free_port(host)
+    fallback = reserve_free_port(host, occupied_ports)
     print(f"Port {requested} is busy; using free fallback port {fallback}.", flush=True)
     return fallback
 
@@ -794,7 +876,7 @@ def wait_for_port_available(host: str, port: int, timeout: float = 5.0) -> None:
         return
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if port_available(host, port):
+        if port_available(host, port, ss_occupied_ports()):
             return
         time.sleep(0.2)
 
@@ -1163,6 +1245,7 @@ def run_foreground(args: argparse.Namespace, repo: Path, cloudflared: str) -> in
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=dispatcher_env(repo),
         )
         tunnel = subprocess.Popen(
             tunnel_cmd,
