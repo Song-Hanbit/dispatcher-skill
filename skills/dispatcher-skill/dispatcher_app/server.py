@@ -69,7 +69,6 @@ PROJECT_NAME = REPO_ROOT.name or "Dispatcher"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 AGENTS_PATH = BASE_DIR / "agents.json"
-ensure_agents_file(AGENTS_PATH)
 GLOBAL_RUNTIME_LOCK = "global_execution"
 TREE_EXCLUDED_NAMES = {
     "__pycache__",
@@ -110,6 +109,17 @@ ACTIVITY_CONVERSATION_EVENT_TYPES = {
     "operator_failed",
     "task_failed",
 }
+
+
+def ensure_server_agents_file() -> None:
+    ensure_agents_file(AGENTS_PATH)
+
+
+def read_server_agent_registry() -> dict[str, Any]:
+    ensure_server_agents_file()
+    return read_agent_registry(AGENTS_PATH)
+
+
 ACTION_ITEM_EVENT_TYPES = {
     "manager_command",
     "manager_file_change",
@@ -183,7 +193,7 @@ def append_labeled_note(existing: str, label: str, note: str) -> str:
 
 
 def list_agent_states(store: "Store") -> list[dict[str, Any]]:
-    raw = read_agent_registry(AGENTS_PATH)
+    raw = read_server_agent_registry()
     runtimes = {
         runtime["role_key"]: runtime
         for runtime in store.list_manager_runtime()
@@ -294,7 +304,7 @@ def is_worker_activity_running(worker_activity: dict[str, Any] | None) -> bool:
 
 
 def list_manager_activity(store: "Store") -> list[dict[str, Any]]:
-    raw = read_agent_registry(AGENTS_PATH)
+    raw = read_server_agent_registry()
     runtimes = {
         runtime["role_key"]: runtime
         for runtime in store.list_manager_runtime()
@@ -2711,6 +2721,7 @@ def main() -> None:
         raise SystemExit(
             "DISPATCHER_PASSWORD is required. Run scripts/run_dispatcher_tunnel.py init or set it in the environment."
         )
+    ensure_server_agents_file()
     store = Store(Path(args.db))
     server = DispatcherServer((args.host, args.port), Handler, store)
     print(f"Dispatcher web server running at http://{args.host}:{args.port}")

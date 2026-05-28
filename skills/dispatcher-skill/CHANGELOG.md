@@ -10,6 +10,29 @@ This project uses semantic versioning:
 
 When a coherent todo set changes the package, update `VERSION` and this changelog in the same change. If a todo set is intentionally completed without a release-impacting package change, note that decision in the task result.
 
+## [1.4.0] - 2026-05-28
+
+### Added
+
+- Added `scripts/run_dispatcher_tunnel.py update-skill` as a dry-run-first installed-skill update helper that compares package files, preserves install-local runtime state, checks `VERSION`/`CHANGELOG.md`, runs package smoke by default, and applies only with `--confirm`.
+- Added `init-status` next-step templates for uninitialized installs, including detected `cloudflared` paths, npx/source/skill-root command forms, password input choices, port fallback behavior, and session-name guidance without printing secret values.
+- Added `scripts/run_dispatcher_tunnel.py status` as a post-init verification helper that reports local server HTTP health, expected runtime window state, Quick Tunnel URL presence only, and safe restart candidates without printing the tunnel URL value.
+- Added init-time `AGENTS.md` `Dispatcher Skill Operator Baseline` automation for both `.agents/skills/dispatcher-skill` and `skills/dispatcher-skill` installs, preserving unrelated repository instructions and updating existing baseline blocks idempotently.
+
+### Changed
+
+- Clarified first-install operator flow so required memory/requirements reads plus non-runtime smoke or `init-status` checks may run before the global runtime lock, while `init` still requires the skill-local runtime lock before writing local state.
+- Updated package/update documentation and durable memory to distinguish source, candidate, and installed skill roots, and to keep `data/`, `dispatcher_app/agents.json`, env files, DB/WAL files, logs, tokens, tunnel URLs, prompts, and raw records out of package updates.
+
+### Fixed
+
+- Made runtime-lock failures in unwritable or sandboxed pre-init installs return a concise writable-state hint, and rolled back a newly acquired lock if token-file creation fails.
+- Deferred server-side `dispatcher_app/agents.json` creation until server runtime startup or registry reads, avoiding import-time local-state writes during helper/import paths.
+
+### Tests
+
+- Added regression coverage for update-helper planning, pre-init runtime-lock behavior, `init-status` next-init guidance, post-init `status` summaries, and init-time `AGENTS.md` baseline creation/update behavior.
+
 ## [1.3.2] - 2026-05-28
 
 ### Changed

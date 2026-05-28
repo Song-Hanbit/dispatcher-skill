@@ -11,18 +11,22 @@ The dispatcher task plane runs queued user tasks through managers. Managers may 
 1. Start every operator task with the runtime audit file listing:
 
 ```bash
-find data/codex_runs data/agent_conversations -type f -printf '%T@ %TY-%Tm-%Td %TH:%TM %p\n' | sort -n | tail -n 20
+find data/codex_runs data/agent_conversations -type f -printf '%T@ %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort -n | tail -n 20
 ```
+
+If these paths do not exist in a new install, treat that as "no runtime audit state yet" and continue with the first-install preflight below.
 
 2. If relevant audit records changed, inspect only the latest relevant manager result and conversation tail needed for the task. Treat `data/codex_runs/` and `data/agent_conversations/` as runtime audit logs. Never copy raw audit content, full transcripts, prompts, secrets, stdout/stderr dumps, local tunnel URLs, or full JSONL records into memory.
 
-3. Before substantive inspection, decisions, edits, tests, or runtime state changes, acquire the global runtime mutex:
+3. Before substantive inspection, decisions, edits, tests, or runtime state changes, acquire the global runtime mutex from the dispatcher skill root:
 
 ```bash
-python3 -m dispatcher_app.runtime_lock acquire --owner-plane operator --owner-id operator --lease-seconds 900 --token-file data/operator_runtime_lock.token
+python3 -m dispatcher_app.runtime_lock --db data/dispatcher.db acquire --owner-plane operator --owner-id operator --lease-seconds 900 --token-file data/operator_runtime_lock.token
 ```
 
-The only normal pre-lock operations are the runtime audit and checking whether the mutex is already owned. If the acquire command reports task-plane ownership, wait or report that the dispatcher task plane is active.
+The only normal pre-lock operations are the runtime audit and checking whether the mutex is already owned. First-install exceptions are reading required skill memory and `requirements.md`, running non-runtime `init-status` or package smoke checks, and diagnosing whether the skill-local `data/` directory can be written. If `data/` and `dispatcher_app/agents.json` do not exist yet, still acquire the lock before `init` writes state or starts runtime services. If lock acquisition fails because the skill root or `data/` is read-only under the current sandbox, stop and request the approved write path instead of creating an ad-hoc DB elsewhere.
+
+If the acquire command reports task-plane ownership, wait or report that the dispatcher task plane is active.
 
 4. After audit and lock acquisition, process any nonempty unread handoff addressed to the current agent before other substantive work. Read the handoff, catalog useful durable facts into the relevant `memory/*.md` topic file, update `memory/memory.md` if the catalog changes, then acknowledge/purge the handoff. Do not copy raw logs, full transcripts, prompts, secrets, or non-actionable detail.
 

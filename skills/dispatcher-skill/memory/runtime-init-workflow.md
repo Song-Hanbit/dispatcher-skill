@@ -24,6 +24,14 @@ Before initialization, the operator should read `requirements.md`. It lists host
 
 Initialization has a mandatory memory bootstrap. The helper reads `memory/memory.md`, `memory/operator-onboarding.md`, `memory/runtime-init-workflow.md`, and `memory/context-compression/operator.md` before writing local state. If any required file is missing, init fails instead of guessing. The helper also runs the initialization compact checkpoint over `memory/` so durable memory rejects raw runtime logs, full JSON records, full transcripts, prompts, secrets, private keys, and live tunnel URLs.
 
+First-install pre-lock exception: on a brand-new install, `data/`, runtime audit files, and `dispatcher_app/agents.json` may not exist yet. The operator may read required memory and `requirements.md`, run the non-runtime package smoke check, and run `init-status` before acquiring the runtime lock. Before `init` writes local state or starts services, acquire the lock from the dispatcher skill root with an explicit skill-local DB path:
+
+```bash
+python3 -m dispatcher_app.runtime_lock --db data/dispatcher.db acquire --owner-plane operator --owner-id operator --lease-seconds 900 --token-file data/operator_runtime_lock.token
+```
+
+If this fails with a read-only or sandbox write error, stop and fix the approved write path for the installed skill root. Do not retry by pointing `--db` at an unrelated location, because the runtime lock must protect the same skill-local runtime state that `init`, server, and dispatcher will use.
+
 For deployment preparation, preview local-state cleanup before packaging:
 
 ```bash
@@ -42,6 +50,8 @@ python3 scripts/run_dispatcher_tunnel.py init-status --repo .
 
 `init-status` also reports `operator_memory_ready` and `memory_compact_ready` with file-level metadata only. It must not print memory contents, secrets, local env values, runtime logs, or tunnel URLs.
 
+`init-status` includes a `next_init` object for uninitialized installs. When `cloudflared` is already available through PATH, `~/.local/bin`, ignored `data/bin`, or a configured path, `next_init` includes command templates that use the detected path. The command set includes the current detected install path, a from-skill-root command, a project-local npx form using `.agents/skills/dispatcher-skill`, and a source-repo form using `skills/dispatcher-skill`, so operators can copy the right shape without guessing. Password guidance stays value-free and lists `--password-file <password-file>` as the recommended path, plus `DISPATCHER_PASSWORD` and an interactive TTY prompt. The same object states the default port 8000, free fallback behavior, `--port 0`, and the `<surrounding-repo-name>-tunnel` session rule.
+
 When `cloudflared` is missing or unconfigured, `init-status` also prints copy-ready commands for a server-local `~/.local/bin/cloudflared` install and a matching `init --cloudflared ~/.local/bin/cloudflared` command.
 
 2. Initialize local state when needed:
@@ -54,9 +64,17 @@ python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path>
 
 After `init` creates the default `dispatcher_app/agents.json`, complete any known missing local agent fields before relying on the runtime. Keep the file limited to `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`; leave unknown Codex handles as `null` with `key_status: "missing"` so the dispatcher can populate them on first use. Manager keys are recorded after manager Codex startup, and dispatcher-owned worker keys are recorded as soon as the worker Codex session emits `thread.started`. Do not add secrets, provider tokens, passwords, tunnel URLs, policy text, or lifecycle notes to `agents.json`.
 
-During initialization, ensure the surrounding repository's `AGENTS.md` contains a durable `Dispatcher Skill Operator Baseline` block. Create the file if absent, update the block if present, or append it without overwriting unrelated repository guidance. The block should preserve the always-on operator rules from `SKILL.md`: operator/task-plane boundary, runtime audit, raw-log and secret copying prohibitions, global runtime lock acquire/heartbeat/release discipline, handoff processing order, manager restart-marker boundary, and local-secret handling.
+During initialization, the helper automatically ensures the surrounding repository's `AGENTS.md` contains a durable `Dispatcher Skill Operator Baseline` block. It finds the surrounding repository root for both `.agents/skills/dispatcher-skill` and `skills/dispatcher-skill` installs, creates `AGENTS.md` if absent, replaces an existing marked or heading-based baseline idempotently, or appends the block without overwriting unrelated repository guidance. The block preserves the always-on operator rules from `SKILL.md`: operator/task-plane boundary, runtime audit, raw-log and secret copying prohibitions, global runtime lock acquire/heartbeat/release discipline, handoff processing order, manager restart-marker boundary, and local-secret handling. The generated block must stay value-free: no passwords, tokens, tunnel URLs, raw logs, or runtime state.
 
-At the end of a successful init/start response, include a no-`cd` command for checking the current Quick Tunnel URL. Prefer a command that includes both the helper script path and `--repo`, such as this project-local repository-root form:
+At the end of a successful init/start response, include a no-`cd` command for post-init verification. Prefer a command that includes both the helper script path and `--repo`, such as this project-local repository-root form:
+
+```bash
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py status --repo .agents/skills/dispatcher-skill --session <session>
+```
+
+`status` reports the local server HTTP response, expected tmux window presence for `server`, `dispatcher`, `reboot`, and `tunnel`, and whether a Quick Tunnel URL was detected in the tunnel pane. It does not print the Quick Tunnel URL value. If a component is missing or unhealthy, it suggests the safe host-side candidate (`restart-server`, `restart-dispatcher`, `restart-reboot`, or a tunnel restart that may issue a new URL) while preserving the manager boundary: managers do not call tmux, Cloudflare, tunnel helpers, or restarts directly.
+
+Use the explicit `url` command only when the operator needs the current Quick Tunnel URL value:
 
 ```bash
 python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py url --repo .agents/skills/dispatcher-skill --session <session>

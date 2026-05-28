@@ -83,6 +83,75 @@ python3 scripts/run_dispatcher_tunnel.py reset --repo <candidate>
 
 Without `--confirm-reset`, this is a dry run that lists ignored local state and generated caches. After reviewing the target list, rerun with `--confirm-reset` to delete only the skill-local `data/` directory, Python bytecode, `__pycache__/`, and `.pytest_cache/`. It does not remove source files, portable docs, or the policy-managed `bin/cloudflared` binary.
 
+## Updating Installed Skills
+
+When replacing an installed dispatcher skill with a newer payload, keep the source/candidate tree, installed skill root, and install-local runtime state separate.
+
+Path conventions:
+
+- In this development repository, the shippable source payload is `skills/dispatcher-skill/`.
+- In a project-local npx install, the live skill root is normally `.agents/skills/dispatcher-skill/`.
+- From inside a skill root, helper commands use `--repo .`; from the surrounding project root, pass the explicit installed path such as `--repo .agents/skills/dispatcher-skill`.
+
+Prepare the candidate before touching the live install:
+
+1. Build or select a candidate from packaged source files, not from the live runtime directory.
+2. Run `python3 scripts/run_dispatcher_tunnel.py reset --repo <candidate>` and review the dry-run list. Use `--confirm-reset` only on a disposable candidate or when ignored local state should actually be removed.
+3. Run `python3 scripts/smoke_skill_package.py --repo <candidate>` against the candidate. This validates source/help/init-status behavior without starting server, dispatcher, tmux, Cloudflare, or network work.
+
+Update the installed skill by replacing only package content: `SKILL.md`, portable `memory/` docs, `requirements.md`, `VERSION`, `CHANGELOG.md`, `dispatcher_app/` source/templates/static/schema files, helper scripts, and any selected non-secret package metadata or vetted binary profile content.
+
+Do not copy, package, overwrite, or delete installation-local runtime state during an update:
+
+- `data/`, including `dispatcher.env`, SQLite DB/WAL files, runtime logs, reboot state, request logs, PID/socket files, and lock/token files.
+- `dispatcher_app/agents.json`, which is per-install identity state.
+- Passwords, helper tokens, Cloudflare tokens, local tunnel URLs, shell history, raw logs, full transcripts, prompts, stdout/stderr dumps, full JSON records, and other secrets.
+- Host-specific tmux, process, network, and tunnel state.
+
+After copying the payload, run `init-status` against the installed root:
+
+```bash
+python3 .agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py init-status --repo .agents/skills/dispatcher-skill
+```
+
+or, from inside the installed skill root:
+
+```bash
+python3 scripts/run_dispatcher_tunnel.py init-status --repo .
+```
+
+If the update changes runtime code or static assets, restart only the affected runtime process after validation: `restart-server` for server/static/API-only changes, `restart-dispatcher` for dispatcher, manager prompt, worker, or queue-loop changes, and the broader host-side restart flow only when multiple runtime processes must reload together. Dispatcher managers must not call restart helpers directly; a manager task asks for the restart by adding the appropriate final `REBOOT_AFTER_TASK ...` marker after implementation, documentation or memory updates, and verification. Operators perform host-side restarts after the runtime audit and mutex procedure.
+
+For rollback, restore the previous payload source files while preserving the same install-local runtime state. Do not roll back by restoring old `data/`, `dispatcher_app/agents.json`, env files, DB files, logs, or tokens unless the user explicitly approves a separate runtime-state recovery.
+
+## Update Helper
+
+Implemented helper shape:
+
+```bash
+python3 scripts/run_dispatcher_tunnel.py update-skill --repo <installed-skill-root> --source <source-payload-root> --candidate <candidate-root>
+```
+
+Arguments:
+
+- `--repo <installed-skill-root>` is the live installed dispatcher skill root to update, such as `.agents/skills/dispatcher-skill` in a project-local npx install. This matches the existing helper convention where `--repo .` means the current skill root.
+- `--source <source-payload-root>` is the desired new payload source, such as `skills/dispatcher-skill` in this development repository or another checked-out release payload.
+- `--candidate <candidate-root>` is a prepared staging copy used for reset dry-run, smoke checks, comparison, and eventual copy. It must not be the live installed root. If omitted, the helper treats `--source` as the candidate for dry-run only; `--confirm` requires an explicit candidate path.
+
+Default behavior is dry-run only. The dry-run:
+
+- Validate that source, candidate, and installed roots are distinct where destructive writes could occur, and refuse a candidate or source that points at the live runtime tree for confirmed updates.
+- Run or report the equivalent of `python3 scripts/run_dispatcher_tunnel.py reset --repo <candidate>` without `--confirm-reset`, showing ignored runtime state and generated cache paths that would be cleaned from the candidate, not from the installed runtime.
+- Compare package files from candidate to installed root and list planned adds, modifications, removals, and unchanged files. The comparison must use the package include/exclude policy, not raw directory copying.
+- Separately list runtime state that will be preserved: `data/`, `dispatcher_app/agents.json`, env files including `dispatcher.env`, DB/WAL files, logs, reboot state, request logs, PID/socket files, lock/token files, local tunnel URLs, raw logs, prompts, stdout/stderr dumps, full JSON records, and secrets.
+- Read installed and candidate `VERSION`; read the candidate `CHANGELOG.md` top release heading; report version movement and warn when the candidate version is missing, older, equal, or not represented in the changelog.
+- Run `python3 scripts/smoke_skill_package.py --repo <candidate>` by default because it is non-runtime validation. `--skip-smoke` supports quick comparison, but confirmed updates require a passing smoke check unless a deliberate `--allow-unsmoked` override is supplied.
+- Print the post-copy validation command, especially `init-status` against the installed root, and print the appropriate restart guidance without performing runtime actions.
+
+Confirmed behavior requires `--confirm`. With `--confirm`, the helper replaces only package content under the installed skill root, deletes installed package files that are absent from the candidate, and preserves all excluded runtime state. It stages copies before mutating the install tree and rolls back package-file changes when an apply failure is raised. It does not run tmux, Cloudflare, server, dispatcher, reboot watcher, or restart commands. If runtime code changed, the output suggests the narrow restart class: `restart-server` for server/static/API-only changes, `restart-dispatcher` for dispatcher, manager prompt, worker, or queue-loop changes, and a broader operator restart flow only when multiple runtime processes must reload together.
+
+Manager boundary: dispatcher manager tasks may design, document, or run dry-run checks when appropriate, but they must not call tmux, cloudflared, tunnel start/restart commands, or `dispatcher_app.reboot request` directly. If a manager-run update task changes code that needs a runtime reload, the manager finishes implementation, docs or memory updates, and verification first, then adds the final `REBOOT_AFTER_TASK ...` marker. Operators perform any host-side confirmed update or restart after the runtime audit and mutex procedure.
+
 ## Exclude Policy
 
 Do not package local runtime or machine-specific state:

@@ -13,7 +13,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -33,8 +35,43 @@ WORKSPACE_ROOT_ENV = "DISPATCHER_WORKSPACE_ROOT"
 CANDIDATE_OPERATOR_KEY_ENV = ("DISPATCHER_OPERATOR_KEY", "CODEX_THREAD_ID")
 RECOMMENDED_CLOUDFLARED_INSTALL_DIR = "~/.local/bin"
 RECOMMENDED_CLOUDFLARED_PATH = "~/.local/bin/cloudflared"
+OPERATOR_BASELINE_BEGIN = "<!-- BEGIN DISPATCHER SKILL OPERATOR BASELINE -->"
+OPERATOR_BASELINE_END = "<!-- END DISPATCHER SKILL OPERATOR BASELINE -->"
 RESET_CACHE_DIR_NAMES = ("__pycache__", ".pytest_cache")
 RESET_BYTECODE_SUFFIXES = (".pyc", ".pyo")
+PACKAGE_EXCLUDED_TOP_LEVEL = (LOCAL_STATE_DIR, ".git")
+PACKAGE_EXCLUDED_FILES = ("dispatcher_app/agents.json",)
+PACKAGE_EXCLUDED_FILE_NAMES = (ENV_FILE_NAME,)
+PACKAGE_EXCLUDED_SUFFIXES = (
+    *RESET_BYTECODE_SUFFIXES,
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".db-wal",
+    ".db-shm",
+    ".log",
+    ".jsonl",
+    ".pid",
+    ".sock",
+    ".token",
+)
+PRESERVED_RUNTIME_STATE_LABELS = (
+    "data/",
+    "dispatcher_app/agents.json",
+    "dispatcher.env",
+    "SQLite DB/WAL files",
+    "runtime logs",
+    "reboot state",
+    "request logs",
+    "PID/socket files",
+    "lock/token files",
+    "local tunnel URLs",
+    "raw logs",
+    "prompts",
+    "stdout/stderr dumps",
+    "full JSON records",
+    "secrets",
+)
 REQUIRED_REPO_FILES = (
     REQUIREMENTS_FILE_NAME,
     "dispatcher_app/agent_registry.py",
@@ -66,6 +103,7 @@ def parse_args() -> argparse.Namespace:
             "stop",
             "foreground",
             "install-cloudflared",
+            "update-skill",
         ],
         default="start",
         help="Operation to run. Use init-status before runtime commands and init after migrating the skill into a new repository.",
@@ -103,6 +141,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For reset, actually remove ignored local runtime state and generated caches. Without this flag reset is a dry run.",
     )
+    parser.add_argument("--source", default=None, help="For update-skill, source dispatcher-skill payload root.")
+    parser.add_argument("--candidate", default=None, help="For update-skill, prepared candidate dispatcher-skill root.")
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="For update-skill, apply the package-file update. Without this flag update-skill is a dry run.",
+    )
+    parser.add_argument(
+        "--skip-smoke",
+        action="store_true",
+        help="For update-skill, skip the non-runtime package smoke check.",
+    )
+    parser.add_argument(
+        "--allow-unsmoked",
+        action="store_true",
+        help="For update-skill --confirm, allow applying without a passing smoke check.",
+    )
     parser.add_argument(
         "--session",
         default=None,
@@ -111,6 +166,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--replace", action="store_true", help="Replace an existing tmux session on start.")
     parser.add_argument("--url-timeout", default=45, type=float, help="Seconds to wait for a Quick Tunnel URL.")
     return parser.parse_args()
+
+
+@dataclass(frozen=True)
+class UpdatePlan:
+    added: list[str]
+    modified: list[str]
+    removed: list[str]
+    unchanged: list[str]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.added or self.modified or self.removed)
 
 
 def skill_dir() -> Path:
@@ -267,6 +334,114 @@ def cloudflared_user_bin_commands(repo: Path, port: int = 8000) -> dict[str, str
     }
 
 
+def display_path(path: str | Path) -> str:
+    path_obj = Path(path).expanduser()
+    try:
+        home = Path.home().resolve()
+        resolved = path_obj.resolve(strict=False)
+        relative = resolved.relative_to(home)
+        return f"~/{relative.as_posix()}"
+    except (OSError, ValueError):
+        return str(path_obj)
+
+
+def repo_install_kind(repo: Path) -> str:
+    if repo.name == "dispatcher-skill" and repo.parent.name == "skills":
+        if repo.parent.parent.name == ".agents":
+            return "project-local-npx"
+        return "source-repo"
+    return "standalone"
+
+
+def repo_arg_from_workspace_root(repo: Path) -> str:
+    workspace_root = workspace_root_for_path(repo)
+    try:
+        return repo.relative_to(workspace_root).as_posix()
+    except ValueError:
+        return str(repo)
+
+
+def init_command(
+    *,
+    script_path: str,
+    repo_arg: str,
+    cloudflared_path: str,
+    port: int = 8000,
+    password_arg: str = "--password-file <password-file>",
+) -> str:
+    return (
+        f"python3 {script_path} init --repo {repo_arg} "
+        f"--cloudflared {cloudflared_path} --port {port} {password_arg}"
+    )
+
+
+def init_status_next_steps(repo: Path, cloudflared_status: dict[str, object]) -> dict[str, object]:
+    detected_path = str(cloudflared_status.get("cloudflared_path") or "")
+    detected_display = display_path(detected_path) if detected_path else ""
+    current_repo_arg = repo_arg_from_workspace_root(repo)
+    current_script = f"{current_repo_arg}/scripts/run_dispatcher_tunnel.py"
+    cloudflared_arg = shlex.quote(detected_path) if detected_path else "<cloudflared-path>"
+    current_command = init_command(
+        script_path=shlex.quote(current_script),
+        repo_arg=shlex.quote(current_repo_arg),
+        cloudflared_path=cloudflared_arg,
+    )
+    skill_root_command = init_command(
+        script_path="scripts/run_dispatcher_tunnel.py",
+        repo_arg=".",
+        cloudflared_path=cloudflared_arg,
+    )
+    project_local_npx_command = init_command(
+        script_path=".agents/skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py",
+        repo_arg=".agents/skills/dispatcher-skill",
+        cloudflared_path=cloudflared_arg,
+    )
+    source_repo_command = init_command(
+        script_path="skills/dispatcher-skill/scripts/run_dispatcher_tunnel.py",
+        repo_arg="skills/dispatcher-skill",
+        cloudflared_path=cloudflared_arg,
+    )
+    return {
+        "cloudflared_detected": bool(cloudflared_status.get("cloudflared_available")),
+        "cloudflared_path": detected_display,
+        "current_install_kind": repo_install_kind(repo),
+        "current_repo_arg_from_workspace_root": current_repo_arg,
+        "commands": {
+            "from_skill_root": skill_root_command,
+            "from_current_workspace_root": current_command,
+            "project_local_npx_from_repo_root": project_local_npx_command,
+            "source_repo_from_repo_root": source_repo_command,
+        },
+        "password_inputs": [
+            {
+                "method": "--password-file",
+                "recommended": True,
+                "usage": "put the password in a temporary local file and pass --password-file <password-file>",
+            },
+            {
+                "method": "DISPATCHER_PASSWORD",
+                "recommended": False,
+                "usage": "set DISPATCHER_PASSWORD in the process environment before running init",
+            },
+            {
+                "method": "TTY prompt",
+                "recommended": False,
+                "usage": "omit --password and --password-file in an interactive terminal",
+            },
+        ],
+        "port": {
+            "default": 8000,
+            "fallback": "if the requested port is busy, init chooses a free fallback unless --strict-port is supplied",
+            "random": "use --port 0 to request any free port; init --no-start requires a concrete port",
+        },
+        "session": {
+            "default": default_init_session(repo),
+            "rule": "<surrounding-repo-name>-tunnel based on the repository above .agents/ or skills/",
+        },
+        "secret_policy": "passwords, helper tokens, and tunnel URLs are not printed by init-status",
+    }
+
+
 def cloudflared_missing_message(repo: Path, *, detail: str | None = None, port: int = 8000) -> str:
     commands = cloudflared_user_bin_commands(repo, port)
     lines = []
@@ -409,6 +584,87 @@ def workspace_root_for_path(path: Path) -> Path:
             return skills_container.parent.resolve()
         return skills_container.resolve()
     return path
+
+
+def agents_baseline_path(repo: Path) -> Path:
+    return workspace_root_for_path(repo) / "AGENTS.md"
+
+
+def operator_baseline_block(repo: Path) -> str:
+    repo_arg = repo_arg_from_workspace_root(repo)
+    quoted_repo = shlex.quote(repo_arg)
+    return "\n".join(
+        [
+            OPERATOR_BASELINE_BEGIN,
+            "## Dispatcher Skill Operator Baseline",
+            "",
+            f"- This repository uses the dispatcher skill at `{repo_arg}`; run dispatcher helper commands from that skill root.",
+            "- The operator is outside the dispatcher task plane and owns maintenance, runtime inspection, verification, and app evolution.",
+            "- Start operator work with runtime audit and inspect only relevant recent audit records; do not copy raw logs, full transcripts, prompts, secrets, stdout/stderr dumps, local or public tunnel URLs, full JSON records, DB contents, or runtime state into chat, memory, or docs.",
+            f"- Before substantive operator work, acquire the global runtime lock from the skill root, for example `cd {quoted_repo} && python3 -m dispatcher_app.runtime_lock --db data/dispatcher.db acquire --owner-plane operator --owner-id operator --lease-seconds 900 --token-file data/operator_runtime_lock.token`; on first install, required memory/requirements reads plus non-runtime `init-status` or smoke checks are allowed before this lock.",
+            "- After audit and lock acquisition, process unread handoffs addressed to the current agent before other substantive work, cataloging only durable facts before ack or purge.",
+            "- Managers must not call tmux, Cloudflare, tunnel scripts, restarts, or `dispatcher_app.reboot request` directly; manager runtime reloads use a final `REBOOT_AFTER_TASK ...` marker after implementation, docs or memory updates, and verification.",
+            "- Passwords, helper tokens, lock tokens, and tunnel URLs are local runtime secrets and must not be printed or copied into tracked docs or durable memory.",
+            OPERATOR_BASELINE_END,
+            "",
+        ]
+    )
+
+
+def replace_legacy_operator_baseline(text: str, block: str) -> str | None:
+    heading = re.search(r"(?im)^#{1,6}\s+Dispatcher Skill Operator Baseline\s*$", text)
+    if not heading:
+        return None
+    heading_line = text[heading.start() : heading.end()]
+    level = len(heading_line) - len(heading_line.lstrip("#"))
+    end = len(text)
+    for match in re.finditer(r"(?m)^#{1,6}\s+\S.*$", text[heading.end() :]):
+        candidate = heading.end() + match.start()
+        candidate_line = text[candidate : heading.end() + match.end()]
+        candidate_level = len(candidate_line) - len(candidate_line.lstrip("#"))
+        if candidate_level <= level:
+            end = candidate
+            break
+    prefix = text[: heading.start()].rstrip()
+    suffix = text[end:].lstrip("\n")
+    return join_markdown_sections(prefix, block.rstrip(), suffix)
+
+
+def join_markdown_sections(*sections: str) -> str:
+    present = [section.strip("\n") for section in sections if section.strip()]
+    if not present:
+        return ""
+    return "\n\n".join(present) + "\n"
+
+
+def update_operator_baseline_text(text: str, block: str) -> str:
+    start = text.find(OPERATOR_BASELINE_BEGIN)
+    end = text.find(OPERATOR_BASELINE_END)
+    if start != -1 and end != -1 and start < end:
+        end += len(OPERATOR_BASELINE_END)
+        prefix = text[:start].rstrip()
+        suffix = text[end:].lstrip("\n")
+        return join_markdown_sections(prefix, block.rstrip(), suffix)
+
+    legacy = replace_legacy_operator_baseline(text, block)
+    if legacy is not None:
+        return legacy
+
+    return join_markdown_sections(text, block.rstrip())
+
+
+def ensure_operator_baseline(repo: Path) -> str:
+    path = agents_baseline_path(repo)
+    block = operator_baseline_block(repo)
+    try:
+        original = path.read_text(encoding="utf-8") if path.is_file() else ""
+        updated = update_operator_baseline_text(original, block)
+        if updated == original:
+            return "verified"
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"Could not write Dispatcher Skill Operator Baseline to {path}: {exc.strerror or exc}") from exc
+    return "updated" if original else "created"
 
 
 def workspace_root_fallback_command() -> str:
@@ -600,6 +856,356 @@ def reset_for_deployment(args: argparse.Namespace, repo: Path) -> int:
     return 0
 
 
+def resolve_required_skill_root(raw_path: str | None, label: str) -> Path:
+    if not raw_path:
+        raise SystemExit(f"update-skill requires {label}.")
+    root = Path(raw_path).expanduser().resolve()
+    validate_repo_requirements(root)
+    return root
+
+
+def same_resolved_path(left: Path, right: Path) -> bool:
+    return left.resolve(strict=False) == right.resolve(strict=False)
+
+
+def package_path_excluded(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return True
+    if parts[0] in PACKAGE_EXCLUDED_TOP_LEVEL:
+        return True
+    if any(part in RESET_CACHE_DIR_NAMES for part in parts):
+        return True
+    normalized = relative_path.as_posix()
+    if normalized in PACKAGE_EXCLUDED_FILES:
+        return True
+    if relative_path.name in PACKAGE_EXCLUDED_FILE_NAMES:
+        return True
+    return relative_path.name.endswith(PACKAGE_EXCLUDED_SUFFIXES)
+
+
+def iter_package_files(root: Path) -> dict[str, Path]:
+    files: dict[str, Path] = {}
+    for current_root, dir_names, file_names in os.walk(root):
+        current_path = Path(current_root)
+        relative_dir = current_path.relative_to(root)
+        kept_dir_names = []
+        for dir_name in dir_names:
+            relative = relative_dir / dir_name if str(relative_dir) != "." else Path(dir_name)
+            if package_path_excluded(relative):
+                continue
+            kept_dir_names.append(dir_name)
+        dir_names[:] = kept_dir_names
+
+        for file_name in file_names:
+            path = current_path / file_name
+            relative = path.relative_to(root)
+            if package_path_excluded(relative):
+                continue
+            files[relative.as_posix()] = path
+    return files
+
+
+def files_equal(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except OSError:
+        return False
+    if left_stat.st_size != right_stat.st_size:
+        return False
+    try:
+        return left.read_bytes() == right.read_bytes()
+    except OSError:
+        return False
+
+
+def build_update_plan(candidate: Path, installed: Path) -> UpdatePlan:
+    candidate_files = iter_package_files(candidate)
+    installed_files = iter_package_files(installed)
+    candidate_keys = set(candidate_files)
+    installed_keys = set(installed_files)
+
+    added = sorted(candidate_keys - installed_keys)
+    removed = sorted(installed_keys - candidate_keys)
+    modified = sorted(
+        relative for relative in candidate_keys & installed_keys if not files_equal(candidate_files[relative], installed_files[relative])
+    )
+    unchanged = sorted(relative for relative in candidate_keys & installed_keys if relative not in set(modified))
+    return UpdatePlan(added=added, modified=modified, removed=removed, unchanged=unchanged)
+
+
+def read_text_if_exists(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def changelog_top_release(root: Path) -> str:
+    path = root / "CHANGELOG.md"
+    if not path.is_file():
+        return ""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            return stripped
+    return ""
+
+
+def parsed_version(value: str) -> tuple[int, ...] | None:
+    if not value:
+        return None
+    parts = value.strip().split(".")
+    parsed: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        parsed.append(int(part))
+    return tuple(parsed)
+
+
+def version_warnings(installed: Path, candidate: Path) -> list[str]:
+    installed_version = read_text_if_exists(installed / "VERSION")
+    candidate_version = read_text_if_exists(candidate / "VERSION")
+    top_release = changelog_top_release(candidate)
+    warnings: list[str] = []
+    if not candidate_version:
+        warnings.append("candidate VERSION is missing or empty")
+    if candidate_version and top_release and candidate_version not in top_release:
+        warnings.append("candidate CHANGELOG.md top release does not mention candidate VERSION")
+    if candidate_version and not top_release:
+        warnings.append("candidate CHANGELOG.md has no release heading")
+    installed_parsed = parsed_version(installed_version)
+    candidate_parsed = parsed_version(candidate_version)
+    if installed_parsed is not None and candidate_parsed is not None and candidate_parsed <= installed_parsed:
+        relation = "equal to" if candidate_parsed == installed_parsed else "older than"
+        warnings.append(f"candidate VERSION is {relation} installed VERSION")
+    return warnings
+
+
+def print_version_summary(installed: Path, candidate: Path) -> None:
+    installed_version = read_text_if_exists(installed / "VERSION") or "(missing)"
+    candidate_version = read_text_if_exists(candidate / "VERSION") or "(missing)"
+    top_release = changelog_top_release(candidate) or "(missing)"
+    print(f"Version: installed {installed_version} -> candidate {candidate_version}", flush=True)
+    print(f"Candidate changelog top release: {top_release}", flush=True)
+    for warning in version_warnings(installed, candidate):
+        print(f"WARN {warning}", flush=True)
+
+
+def print_reset_dry_run_summary(candidate: Path) -> None:
+    targets = reset_targets(candidate)
+    print(f"Candidate reset dry run: {candidate}", flush=True)
+    if not targets:
+        print("- no ignored runtime state or generated caches found", flush=True)
+        return
+    for target in targets:
+        print(f"- would remove {relative_display_path(candidate, target)}", flush=True)
+
+
+def print_update_plan(plan: UpdatePlan) -> None:
+    print(
+        "Package diff: "
+        f"{len(plan.added)} add, {len(plan.modified)} modify, {len(plan.removed)} remove, {len(plan.unchanged)} unchanged",
+        flush=True,
+    )
+    for label, paths in (("ADD", plan.added), ("MODIFY", plan.modified), ("REMOVE", plan.removed)):
+        if not paths:
+            continue
+        print(f"{label}:", flush=True)
+        for path in paths:
+            print(f"- {path}", flush=True)
+
+
+def print_preserved_runtime_state(installed: Path) -> None:
+    print("Runtime state preserved:", flush=True)
+    for label in PRESERVED_RUNTIME_STATE_LABELS:
+        print(f"- {label}", flush=True)
+    existing = [path for path in reset_targets(installed) if path.exists() or path.is_symlink()]
+    agents = agents_path(installed)
+    if agents.exists() or agents.is_symlink():
+        existing.append(agents)
+    if existing:
+        print("Existing preserved paths:", flush=True)
+        for path in sorted(existing, key=lambda item: str(item)):
+            print(f"- {relative_display_path(installed, path)}", flush=True)
+
+
+def run_update_smoke(candidate: Path, python: str) -> None:
+    smoke_script = candidate / "scripts" / "smoke_skill_package.py"
+    if not smoke_script.is_file():
+        raise SystemExit(f"Candidate smoke check helper is missing: {smoke_script}")
+    completed = subprocess.run(
+        [python, str(smoke_script), "--repo", str(candidate), "--python", python],
+        cwd=candidate,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(f"Candidate package smoke check failed with exit {completed.returncode}.")
+    print("Candidate package smoke check passed.", flush=True)
+
+
+def ensure_update_paths_safe(args: argparse.Namespace, installed: Path, source: Path, candidate: Path) -> None:
+    if args.confirm and not args.candidate:
+        raise SystemExit("update-skill --confirm requires an explicit --candidate path.")
+    if args.confirm and same_resolved_path(candidate, installed):
+        raise SystemExit("Refusing confirmed update because --candidate points at the installed skill root.")
+    if args.confirm and same_resolved_path(source, installed):
+        raise SystemExit("Refusing confirmed update because --source points at the installed skill root.")
+    if same_resolved_path(candidate, installed):
+        print("WARN candidate points at the installed skill root; dry-run only is allowed.", flush=True)
+    if same_resolved_path(source, installed):
+        print("WARN source points at the installed skill root; dry-run only is allowed.", flush=True)
+
+
+def copy_package_file(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        target = os.readlink(source)
+        if destination.exists() or destination.is_symlink():
+            destination.unlink()
+        os.symlink(target, destination)
+        return
+    shutil.copy2(source, destination)
+
+
+def remove_package_file(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.exists():
+        raise OSError(f"Refusing to remove non-file package path: {path}")
+
+
+def prune_empty_dirs(root: Path, changed_paths: list[str]) -> None:
+    candidates = sorted({(root / path).parent for path in changed_paths}, key=lambda item: len(item.parts), reverse=True)
+    for directory in candidates:
+        while directory != root and directory.exists():
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+            directory = directory.parent
+
+
+def apply_update_plan(plan: UpdatePlan, candidate: Path, installed: Path) -> None:
+    if not plan.changed:
+        print("No package file changes to apply.", flush=True)
+        return
+
+    changed_paths = plan.added + plan.modified + plan.removed
+    with tempfile.TemporaryDirectory(prefix="dispatcher-skill-update-", dir=str(installed.parent)) as temp_dir:
+        temp_root = Path(temp_dir)
+        staged_root = temp_root / "staged"
+        backup_root = temp_root / "backup"
+
+        for relative in plan.added + plan.modified:
+            source = candidate / relative
+            staged = staged_root / relative
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            copy_package_file(source, staged)
+
+        for relative in plan.modified + plan.removed:
+            destination = installed / relative
+            if not destination.exists() and not destination.is_symlink():
+                continue
+            if not (destination.is_file() or destination.is_symlink()):
+                raise SystemExit(f"Refusing to replace non-file package path: {relative}")
+            backup = backup_root / relative
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            copy_package_file(destination, backup)
+
+        try:
+            for relative in plan.removed:
+                remove_package_file(installed / relative)
+            for relative in plan.added + plan.modified:
+                destination = installed / relative
+                if destination.exists() and not (destination.is_file() or destination.is_symlink()):
+                    raise OSError(f"Refusing to replace non-file package path: {destination}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                copy_package_file(staged_root / relative, destination)
+            prune_empty_dirs(installed, plan.removed)
+        except Exception:
+            for relative in plan.added:
+                destination = installed / relative
+                if destination.exists() or destination.is_symlink():
+                    remove_package_file(destination)
+            for relative in plan.modified + plan.removed:
+                backup = backup_root / relative
+                if not backup.exists() and not backup.is_symlink():
+                    continue
+                destination = installed / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                copy_package_file(backup, destination)
+            raise
+
+    print(
+        f"Applied package update: {len(plan.added)} added, {len(plan.modified)} modified, {len(plan.removed)} removed.",
+        flush=True,
+    )
+
+
+def restart_guidance(plan: UpdatePlan) -> str:
+    changed = plan.added + plan.modified + plan.removed
+    if not changed:
+        return "no restart"
+    if any(path.startswith("dispatcher_app/static/") or path.startswith("dispatcher_app/templates/") for path in changed):
+        if not any(
+            path.startswith("dispatcher_app/")
+            and not (path.startswith("dispatcher_app/static/") or path.startswith("dispatcher_app/templates/"))
+            for path in changed
+        ):
+            return "restart-server"
+    if any(path.startswith("dispatcher_app/") or path == "SKILL.md" or path.startswith("memory/") for path in changed):
+        return "restart-dispatcher"
+    return "restart-server"
+
+
+def update_skill(args: argparse.Namespace, installed: Path) -> int:
+    validate_repo_requirements(installed)
+    source = resolve_required_skill_root(args.source, "--source")
+    candidate = resolve_required_skill_root(args.candidate or args.source, "--candidate")
+    ensure_update_paths_safe(args, installed, source, candidate)
+
+    print("Skill update helper", flush=True)
+    print(f"Installed root: {installed}", flush=True)
+    print(f"Source root: {source}", flush=True)
+    print(f"Candidate root: {candidate}", flush=True)
+    print("Mode: confirm" if args.confirm else "Mode: dry-run", flush=True)
+
+    print_version_summary(installed, candidate)
+    print_reset_dry_run_summary(candidate)
+    plan = build_update_plan(candidate, installed)
+    print_update_plan(plan)
+    print_preserved_runtime_state(installed)
+
+    smoke_passed = False
+    if args.skip_smoke:
+        print("Candidate package smoke check skipped.", flush=True)
+    else:
+        run_update_smoke(candidate, args.python)
+        smoke_passed = True
+
+    print("Post-copy validation:", flush=True)
+    print(f"- python3 scripts/run_dispatcher_tunnel.py init-status --repo {shlex.quote(str(installed))}", flush=True)
+    print(f"Restart guidance: {restart_guidance(plan)} after validation if runtime code was changed.", flush=True)
+
+    if not args.confirm:
+        print("Dry run only. Re-run with --confirm to apply package file changes.", flush=True)
+        return 0
+    if not smoke_passed and not args.allow_unsmoked:
+        raise SystemExit("Refusing confirmed update without a passing smoke check. Use --allow-unsmoked to override.")
+
+    apply_update_plan(plan, candidate, installed)
+    return 0
+
+
 def cloudflared_availability(repo: Path, path_arg: str | None) -> dict[str, object]:
     try:
         path = find_cloudflared(repo, path_arg)
@@ -646,6 +1252,7 @@ def initialization_status(repo: Path) -> dict[str, object]:
     cloudflared_install_dir = env_values.get(CLOUDFLARED_INSTALL_DIR_ENV, "")
     cloudflared_status = cloudflared_availability(repo, cloudflared_config or None)
     cloudflared_commands = cloudflared_user_bin_commands(repo)
+    next_init = init_status_next_steps(repo, cloudflared_status)
     return {
         "initialized": (
             not missing_files
@@ -676,6 +1283,8 @@ def initialization_status(repo: Path) -> dict[str, object]:
         "cloudflared_install_dir": cloudflared_install_dir or str(local_bin_dir(repo)),
         "cloudflared_user_bin_install_command": cloudflared_commands["install"],
         "cloudflared_user_bin_init_command": cloudflared_commands["init"],
+        "detected_workspace_root": str(workspace_root_for_path(repo)),
+        "next_init": next_init,
         **agents_status,
         **cloudflared_status,
     }
@@ -751,6 +1360,14 @@ def find_repo(path_arg: str | None) -> Path:
             if (nested / "dispatcher_app" / "server.py").is_file():
                 return nested
     raise SystemExit("Could not find dispatcher_app/server.py. Pass --repo /path/to/repo.")
+
+
+def resolve_command_repo(args: argparse.Namespace) -> Path:
+    if args.command == "update-skill" and args.repo:
+        repo = Path(args.repo).expanduser().resolve()
+        validate_repo_requirements(repo)
+        return repo
+    return find_repo(args.repo)
 
 
 def find_cloudflared(repo: Path, path_arg: str | None, *, port: int = 8000) -> str:
@@ -1040,6 +1657,152 @@ def wait_for_quick_url(session: str, timeout: float) -> str | None:
     return None
 
 
+RUNTIME_WINDOWS = ("server", "dispatcher", "reboot", "tunnel")
+
+
+def first_error_line(message: str) -> str:
+    return message.strip().splitlines()[0] if message.strip() else ""
+
+
+def server_http_summary(host: str, port: int) -> dict[str, object]:
+    if port <= 0:
+        return {
+            "ok": False,
+            "status": 0,
+            "url": "",
+            "error": "server port is not configured",
+        }
+    url = f"http://{host}:{port}/"
+    try:
+        with urlopen(url, timeout=2) as response:
+            status = int(getattr(response, "status", 0) or 0)
+    except (OSError, URLError) as exc:
+        return {
+            "ok": False,
+            "status": 0,
+            "url": url,
+            "error": first_error_line(str(exc)) or exc.__class__.__name__,
+        }
+    return {
+        "ok": status < 500,
+        "status": status,
+        "url": url,
+        "error": "",
+    }
+
+
+def safe_tmux_runtime_summary(session: str) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "available": bool(shutil.which("tmux")),
+        "accessible": False,
+        "session": "unknown",
+        "windows": {window: "unknown" for window in RUNTIME_WINDOWS},
+        "quick_tunnel_url_detected": False,
+        "error": "",
+    }
+    if not summary["available"]:
+        summary["session"] = "unknown"
+        summary["error"] = "tmux was not found"
+        return summary
+
+    session_result = tmux_run("has-session", "-t", tmux_session_target(session), check=False)
+    if tmux_access_error(session_result):
+        summary["error"] = "tmux is not accessible from this process"
+        return summary
+    summary["accessible"] = True
+    if session_result.returncode != 0:
+        summary["session"] = "absent"
+        summary["windows"] = {window: "absent" for window in RUNTIME_WINDOWS}
+        return summary
+
+    summary["session"] = "running"
+    windows: dict[str, str] = {}
+    for window in RUNTIME_WINDOWS:
+        result = tmux_run("has-session", "-t", tmux_window_target(session, window), check=False)
+        if tmux_access_error(result):
+            summary["accessible"] = False
+            summary["error"] = "tmux is not accessible from this process"
+            windows[window] = "unknown"
+            continue
+        windows[window] = "present" if result.returncode == 0 else "absent"
+    summary["windows"] = windows
+
+    if windows.get("tunnel") == "present":
+        capture = tmux_run(
+            "capture-pane",
+            "-Jpt",
+            tmux_window_target(session, "tunnel"),
+            "-S",
+            "-200",
+            check=False,
+        )
+        if capture.returncode == 0:
+            summary["quick_tunnel_url_detected"] = quick_url_from_text(capture.stdout) is not None
+        elif tmux_access_error(capture):
+            summary["accessible"] = False
+            summary["error"] = "tmux is not accessible from this process"
+    return summary
+
+
+def status_recommendations(server: dict[str, object], tmux: dict[str, object]) -> list[dict[str, str]]:
+    recommendations: list[dict[str, str]] = []
+    if not server.get("ok"):
+        recommendations.append(
+            {
+                "target": "server",
+                "command": "restart-server",
+                "reason": "local server health check failed",
+            }
+        )
+    windows = tmux.get("windows") if isinstance(tmux.get("windows"), dict) else {}
+    if windows.get("dispatcher") == "absent":
+        recommendations.append(
+            {
+                "target": "dispatcher",
+                "command": "restart-dispatcher",
+                "reason": "dispatcher tmux window is absent",
+            }
+        )
+    if windows.get("reboot") == "absent":
+        recommendations.append(
+            {
+                "target": "reboot",
+                "command": "restart-reboot",
+                "reason": "reboot watcher tmux window is absent",
+            }
+        )
+    if windows.get("tunnel") == "absent":
+        recommendations.append(
+            {
+                "target": "tunnel",
+                "command": "start --replace",
+                "reason": "tunnel tmux window is absent; this can issue a new tunnel URL",
+            }
+        )
+    return recommendations
+
+
+def runtime_status_summary(args: argparse.Namespace, repo: Path) -> dict[str, object]:
+    server = server_http_summary(args.host, int(args.port))
+    tmux = safe_tmux_runtime_summary(args.session)
+    return {
+        "repo": str(repo),
+        "session": args.session,
+        "server": server,
+        "tmux": tmux,
+        "quick_tunnel": {
+            "url_detected": bool(tmux.get("quick_tunnel_url_detected")),
+            "url_printed": False,
+            "url_command": helper_command(repo, "url", "--session", args.session),
+        },
+        "recommendations": status_recommendations(server, tmux),
+        "manager_boundary": (
+            "Manager tasks must not call tmux, cloudflared, tunnel helpers, or restarts directly; "
+            "they request runtime reloads with a final REBOOT_AFTER_TASK marker."
+        ),
+    }
+
+
 def print_tmux_summary(repo: Path, session: str, local_url: str, quick_url: str | None) -> None:
     print(f"tmux session: {session}", flush=True)
     print(f"Dispatcher local URL: {local_url}", flush=True)
@@ -1190,17 +1953,8 @@ def print_url(args: argparse.Namespace) -> int:
     return 0
 
 
-def print_status(args: argparse.Namespace) -> int:
-    require_tmux()
-    exists = tmux_session_exists(args.session)
-    print(f"tmux session '{args.session}': {'running' if exists else 'absent'}", flush=True)
-    if exists:
-        for window in ("server", "dispatcher", "reboot", "tunnel"):
-            status = "present" if tmux_window_exists(args.session, window) else "absent"
-            print(f"window {window}: {status}", flush=True)
-        quick_url = quick_url_from_text(tmux_capture(tmux_window_target(args.session, "tunnel")))
-        if quick_url:
-            print(f"Quick Tunnel URL: {quick_url}", flush=True)
+def print_status(args: argparse.Namespace, repo: Path) -> int:
+    print_json(runtime_status_summary(args, repo))
     return 0
 
 
@@ -1325,8 +2079,10 @@ def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
     if not args.no_start:
         require_tmux()
 
+    baseline_status = ensure_operator_baseline(repo)
     write_local_state_files(repo, args, password=password, port=port)
     operator_key_recorded = record_operator_key(repo, operator_key)
+    print(f"{baseline_status.capitalize()} Dispatcher Skill Operator Baseline at {agents_baseline_path(repo)}", flush=True)
     if agents_created:
         print(f"Created local agent registry at {agents_path(repo)}", flush=True)
     else:
@@ -1353,7 +2109,7 @@ def init_migrated_repo(args: argparse.Namespace, repo: Path) -> int:
 
 def main() -> int:
     args = parse_args()
-    repo = find_repo(args.repo)
+    repo = resolve_command_repo(args)
     apply_local_defaults(args, repo)
     apply_repo_defaults(args, repo)
 
@@ -1365,11 +2121,13 @@ def main() -> int:
         return print_init_status(repo)
     if args.command == "reset":
         return reset_for_deployment(args, repo)
+    if args.command == "update-skill":
+        return update_skill(args, repo)
     if args.command == "init":
         return init_migrated_repo(args, repo)
 
     if args.command == "status":
-        return print_status(args)
+        return print_status(args, repo)
     if args.command == "stop":
         return stop_tmux(args)
     if args.command == "url":

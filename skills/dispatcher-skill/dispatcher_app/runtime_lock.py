@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,19 @@ from .server import GLOBAL_RUNTIME_LOCK, Store, public_runtime_lock
 
 def print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def lock_access_error_payload(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
+    return {
+        "error": str(exc),
+        "db": args.db,
+        "hint": (
+            "Could not access the runtime lock database or token file. Run this command from the "
+            "dispatcher skill root or pass --db <skill-root>/data/dispatcher.db, then ensure the "
+            "skill-local data directory is writable. In a sandboxed first init, request the approved "
+            "write path instead of retrying with an ad-hoc database path."
+        ),
+    }
 
 
 def write_token_file(path: Path, token: str) -> None:
@@ -48,7 +62,14 @@ def command_acquire(args: argparse.Namespace) -> int:
 
     token = str(lock["fencing_token"])
     if args.token_file:
-        write_token_file(Path(args.token_file), token)
+        try:
+            write_token_file(Path(args.token_file), token)
+        except OSError:
+            try:
+                store.release_runtime_lock(args.resource, token)
+            except (OSError, sqlite3.Error):
+                pass
+            raise
         print_json({"acquired": True, "lock": public_runtime_lock(lock), "token_file": args.token_file})
     else:
         print_json({"acquired": True, "lock": lock})
@@ -113,8 +134,11 @@ def main() -> int:
             return command_heartbeat(args)
         if args.command == "release":
             return command_release(args)
-    except (OSError, ValueError) as exc:
+    except ValueError as exc:
         print_json({"error": str(exc)})
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        print_json(lock_access_error_payload(args, exc))
         return 1
     print_json({"error": f"Unknown command: {args.command}"})
     return 1
