@@ -10,6 +10,12 @@ This project uses semantic versioning:
 
 When a coherent todo set changes the package, update `VERSION` and this changelog in the same change. If a todo set is intentionally completed without a release-impacting package change, note that decision in the task result.
 
+## [1.3.2] - 2026-05-28
+
+### Changed
+
+- Documented initialization-time insertion of a durable `Dispatcher Skill Operator Baseline` block into the surrounding repository's `AGENTS.md`, preserving operator/task-plane boundaries, audit and lock discipline, handoff ordering, manager restart-marker rules, and local-secret handling outside conversational context.
+
 ## [1.3.1] - 2026-05-28
 
 ### Changed

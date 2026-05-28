@@ -54,6 +54,8 @@ python3 scripts/run_dispatcher_tunnel.py init --repo <repo> --cloudflared <path>
 
 After `init` creates the default `dispatcher_app/agents.json`, complete any known missing local agent fields before relying on the runtime. Keep the file limited to `version`, `key_type`, and agent rows with `role_key`, `name`, `key`, and `key_status`; leave unknown Codex handles as `null` with `key_status: "missing"` so the dispatcher can populate them on first use. Manager keys are recorded after manager Codex startup, and dispatcher-owned worker keys are recorded as soon as the worker Codex session emits `thread.started`. Do not add secrets, provider tokens, passwords, tunnel URLs, policy text, or lifecycle notes to `agents.json`.
 
+During initialization, ensure the surrounding repository's `AGENTS.md` contains a durable `Dispatcher Skill Operator Baseline` block. Create the file if absent, update the block if present, or append it without overwriting unrelated repository guidance. The block should preserve the always-on operator rules from `SKILL.md`: operator/task-plane boundary, runtime audit, raw-log and secret copying prohibitions, global runtime lock acquire/heartbeat/release discipline, handoff processing order, manager restart-marker boundary, and local-secret handling.
+
 At the end of a successful init/start response, include a no-`cd` command for checking the current Quick Tunnel URL. Prefer a command that includes both the helper script path and `--repo`, such as this project-local repository-root form:
 
 ```bash
